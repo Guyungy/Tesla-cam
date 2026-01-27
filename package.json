@@ -24,7 +24,7 @@
       "dist-electron/**/*"
     ],
     "directories": {
-      "output": "release-new"
+      "output": "release"
     },
     "win": {
       "target": "nsis"
