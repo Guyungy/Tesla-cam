@@ -1,0 +1,55 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-brand-primary: #e82127; /* Tesla Red-ish */
+  --color-surface-base: #0a0a0a;
+  --color-surface-panel: #171717;
+  --color-surface-hover: #262626;
+  --animate-fade-in: fade-in 0.3s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+:root {
+  color-scheme: dark;
+  @apply bg-surface-base selection:bg-brand-primary/30 h-screen w-screen overflow-hidden text-gray-200 antialiased selection:text-white;
+  font-family:
+    'Inter',
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-neutral-700/50 transition-colors hover:bg-neutral-600/80;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* Utilities */
+.glass-panel {
+  @apply border border-white/5 bg-neutral-900/80 shadow-xl backdrop-blur-md;
+}
+
+.btn-icon {
+  @apply cursor-pointer rounded-full p-2 text-gray-300 transition-all hover:bg-white/10 hover:text-white active:bg-white/20;
+}
