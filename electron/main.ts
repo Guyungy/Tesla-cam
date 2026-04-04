@@ -1,6 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
-import fs from 'fs';
 import fsPromises from 'fs/promises';
 import os from 'os';
 import { fileURLToPath } from 'url';

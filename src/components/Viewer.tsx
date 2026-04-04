@@ -87,10 +87,9 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
   const players = useMemo(() => Object.values(refMap), [refMap]);
 
   // ── Playing State ──
-  const initialStates: Record<CamName, PlayerState> = {
+  const [statesMap, setStateMap] = useState<Record<CamName, PlayerState>>(() => ({
     back: {}, front: {}, left: {}, right: {}, left_pillar: {}, right_pillar: {},
-  };
-  const [statesMap, setStateMap] = useState<Record<CamName, PlayerState>>(initialStates);
+  }));
   const handleChangeState = useCallback((key: CamName, val: PlayerState) => {
     setStateMap((s) => ({ ...s, [key]: val }));
   }, []);
@@ -1019,6 +1018,15 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
               >
                 OUT {formatExportPoint(exportOut)}
               </button>
+              {(exportIn !== undefined || exportOut !== undefined) && (
+                <button
+                  onClick={() => { setExportIn(undefined); setExportOut(undefined); }}
+                  className="rounded px-1.5 py-1 text-[10px] text-neutral-600 hover:text-neutral-300"
+                  title={t('viewer.clearInOut')}
+                >
+                  ✕
+                </button>
+              )}
             </div>
             <button
               onClick={exportCurrentView}

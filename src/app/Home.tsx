@@ -21,16 +21,19 @@ export function Home({ items, lastFolder, onOpenFolder }: Props) {
   const { t } = useI18n();
   const [clip, setClip] = useState<CamClip>();
   const [footage, setFootage] = useState<CamFootage>();
+  const [loadProgress, setLoadProgress] = useState<{ current: number; total: number }>();
 
   const loadClip = async (item: CamClip) => {
-    if (item === clip) {
-      return;
-    }
+    if (item === clip) return;
     setClip(item);
     revokeFootage(footage);
     setFootage(undefined);
-    const res = await genFootage(item.videos);
-    console.log('genFootage', res);
+    setLoadProgress({ current: 0, total: item.videos.length });
+
+    const res = await genFootage(item.videos, (current, total) => {
+      setLoadProgress({ current, total });
+    });
+    setLoadProgress(undefined);
     setFootage(res);
   };
 
@@ -38,7 +41,6 @@ export function Home({ items, lastFolder, onOpenFolder }: Props) {
     <div className="bg-surface-base flex h-screen w-screen flex-col overflow-hidden text-gray-200">
       <TitleBar />
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
         <Sidebar
           items={items}
           activeClip={clip}
@@ -46,7 +48,6 @@ export function Home({ items, lastFolder, onOpenFolder }: Props) {
           onOpenFolder={onOpenFolder}
         />
 
-        {/* Main Content Area */}
         <div className="from-surface-base relative flex flex-1 flex-col overflow-hidden bg-gradient-to-br to-[#111]">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-gradient-to-b from-black/50 to-transparent" />
 
@@ -59,11 +60,24 @@ export function Home({ items, lastFolder, onOpenFolder }: Props) {
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center">
-                <div className="flex animate-pulse flex-col items-center gap-4">
+                <div className="flex flex-col items-center gap-4">
                   <div className="border-brand-primary h-12 w-12 animate-spin rounded-full border-2 border-t-transparent" />
                   <span className="text-sm font-medium tracking-wider text-neutral-400">
-                    {t('home.loading')}
+                    {loadProgress
+                      ? t('home.loadingProgress', {
+                          current: loadProgress.current,
+                          total: loadProgress.total,
+                        })
+                      : t('home.loading')}
                   </span>
+                  {loadProgress && loadProgress.total > 0 && (
+                    <div className="h-1 w-48 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="bg-brand-primary h-full transition-all duration-200"
+                        style={{ width: `${(loadProgress.current / loadProgress.total) * 100}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )

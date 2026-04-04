@@ -6,6 +6,7 @@ export const locales = {
     // Sidebar
     'sidebar.search': '搜索日期、地点、原因...',
     'sidebar.all': '全部',
+    'sidebar.recent': '最近',
     'sidebar.sentry': '哨兵',
     'sidebar.saved': '手动',
     'sidebar.selectFolder': '选择文件夹',
@@ -24,6 +25,7 @@ export const locales = {
     'viewer.exportClip': '导出片段',
     'viewer.exporting': '导出中...',
     'viewer.jumpToEvent': '跳转到事件',
+    'viewer.clearInOut': '清除',
 
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: 播放/暂停',
@@ -66,6 +68,7 @@ export const locales = {
 
     // Home
     'home.loading': '加载中',
+    'home.loadingProgress': '正在加载素材 ({current}/{total})',
     'home.selectClip': '选择一个片段开始',
 
     // Start page
@@ -75,6 +78,9 @@ export const locales = {
     'start.noClips': '未匹配到有效视频文件，请重新选择',
     'start.localNote': '行车记录仪文件的读取分析查看均在浏览器本地运行',
     'start.notSupported': '当前浏览器不支持文件夹读取功能，请使用最新版 Chrome 浏览器访问',
+
+    // Drag & Drop
+    'drop.hint': '拖放 TeslaCam 文件夹到此处',
 
     // Settings
     'settings.title': '设置',
@@ -95,6 +101,7 @@ export const locales = {
     // Sidebar
     'sidebar.search': 'Search date, location, reason...',
     'sidebar.all': 'All',
+    'sidebar.recent': 'Recent',
     'sidebar.sentry': 'Sentry',
     'sidebar.saved': 'Saved',
     'sidebar.selectFolder': 'Select Folder',
@@ -113,6 +120,7 @@ export const locales = {
     'viewer.exportClip': 'Export Clip',
     'viewer.exporting': 'Exporting...',
     'viewer.jumpToEvent': 'Jump to Event',
+    'viewer.clearInOut': 'Clear',
 
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: Play/Pause',
@@ -155,6 +163,7 @@ export const locales = {
 
     // Home
     'home.loading': 'Loading Footage',
+    'home.loadingProgress': 'Loading footage ({current}/{total})',
     'home.selectClip': 'Select a Clip to Begin',
 
     // Start page
@@ -164,6 +173,9 @@ export const locales = {
     'start.noClips': 'No valid video files found, please try again',
     'start.localNote': 'All file reading and analysis runs locally in your browser',
     'start.notSupported': 'Your browser does not support folder reading. Please use the latest Chrome browser.',
+
+    // Drag & Drop
+    'drop.hint': 'Drop TeslaCam folder here',
 
     // Settings
     'settings.title': 'Settings',

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { type CamClip, genClips } from '../utils';
+import { useI18n } from '../i18n';
 import { Home } from './Home';
 
 const LAST_FOLDER_KEY = 'tesla-cam-last-folder';
@@ -39,6 +40,7 @@ async function readDirectoryFiles(entry: FileSystemDirectoryEntry): Promise<File
 }
 
 export function App() {
+  const { t } = useI18n();
   const [clips, setClips] = useState<CamClip[]>([]);
   const [dragging, setDragging] = useState(false);
   const [lastFolder, setLastFolder] = useState<string | null>(() => {
@@ -156,7 +158,7 @@ export function App() {
               <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
             </svg>
             <span className="text-lg font-medium tracking-wider text-white">
-              Drop TeslaCam folder here
+              {t('drop.hint')}
             </span>
           </div>
         </div>

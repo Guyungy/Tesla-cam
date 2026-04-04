@@ -12,7 +12,6 @@ type Props = {
   playbackRate: number;
   full?: boolean;
   className?: string;
-  /** Camera label shown in top-left corner (grid mode) */
   label?: string;
   onChangeState?: (name: CamName, state: PlayerState) => void;
   onDoubleClick?: () => void;
@@ -32,6 +31,7 @@ export function Player({
   onDoubleClick,
 }: Props) {
   const state = useRef<PlayerState>({});
+  const lastUpdateRef = useRef(0);
 
   const updateState = useCallback(
     (val: PlayerState) => {
@@ -69,6 +69,21 @@ export function Player({
   }, [playbackRate, videoRef]);
   useEffect(syncPlaybackRate, [syncPlaybackRate]);
 
+  // Throttled time update — max ~8 updates/sec instead of 15-60
+  const handleTimeUpdate = useCallback(() => {
+    const now = performance.now();
+    if (now - lastUpdateRef.current < 120) return; // 120ms throttle
+    lastUpdateRef.current = now;
+
+    if (videoRef.current) {
+      const { currentTime, duration } = videoRef.current;
+      updateState({
+        currentTime,
+        ended: duration > 0 && duration - currentTime < 0.1,
+      });
+    }
+  }, [videoRef, updateState]);
+
   return (
     <div
       className={clsx(
@@ -83,32 +98,19 @@ export function Player({
           ref={videoRef}
           src={url}
           muted
-          onSeeking={() => {
-            syncPlaying();
-          }}
+          onSeeking={syncPlaying}
           onLoadStart={() => {
             syncPlaying();
             syncPlaybackRate();
           }}
-          onTimeUpdate={() => {
-            if (videoRef.current) {
-              const { currentTime, duration } = videoRef.current;
-              updateState({
-                currentTime,
-                ended: duration > 0 && duration - currentTime < 0.1,
-              });
-            }
-          }}
-          onEnded={() => {
-            updateState({ ended: true });
-          }}
+          onTimeUpdate={handleTimeUpdate}
+          onEnded={() => updateState({ ended: true })}
           className="max-h-full max-w-full object-contain"
         />
       ) : (
         <div className="h-full w-full bg-black" />
       )}
 
-      {/* Camera name label */}
       {label && (
         <div className="pointer-events-none absolute top-1.5 left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-white/70">
           {label}
