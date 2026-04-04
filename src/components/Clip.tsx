@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import { type CamClip, parseTime } from '../utils';
 import { ClipType } from './ClipType';
 import { Thumb } from './Thumb';
+import { useI18n } from '../i18n';
 
 type Props = {
   item: CamClip;
@@ -12,6 +13,7 @@ type Props = {
 };
 
 export function Clip({ item, active, onClick }: Props) {
+  const { t } = useI18n();
   const timeStr = parseTime(item.name);
   const dateObj = dayjs(timeStr);
   const date = dateObj.format('MM/DD');
@@ -19,7 +21,7 @@ export function Clip({ item, active, onClick }: Props) {
 
   const location =
     [item.event?.city, item.event?.street].filter(Boolean).join(' ') ||
-    '未知位置';
+    t('sidebar.unknownLocation');
 
   return (
     <div

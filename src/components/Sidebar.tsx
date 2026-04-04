@@ -4,6 +4,7 @@ import { FaSearch, FaFilter } from 'react-icons/fa';
 import { MdLocalMovies, MdSecurity, MdSdStorage } from 'react-icons/md';
 import type { CamClip, ClipType } from '../utils';
 import { Clip } from './Clip';
+import { useI18n } from '../i18n';
 
 type Props = {
   items: CamClip[];
@@ -15,6 +16,7 @@ type Props = {
 type FilterType = ClipType | 'all';
 
 export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
+  const { t } = useI18n();
   const [filter, setFilter] = useState<FilterType>('all');
   const [search, setSearch] = useState('');
 
@@ -45,9 +47,9 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
   }, [items, filter, search]);
 
   const tabs = [
-    { id: 'all', label: '全部', icon: MdSdStorage },
-    { id: 'sentry', label: '哨兵', icon: MdSecurity },
-    { id: 'saved', label: '手动', icon: MdLocalMovies },
+    { id: 'all', label: t('sidebar.all'), icon: MdSdStorage },
+    { id: 'sentry', label: t('sidebar.sentry'), icon: MdSecurity },
+    { id: 'saved', label: t('sidebar.saved'), icon: MdLocalMovies },
   ] as const;
 
   return (
@@ -58,7 +60,7 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
           <FaSearch className="absolute top-1/2 left-3 -translate-y-1/2 text-neutral-500" />
           <input
             type="text"
-            placeholder="搜索日期、地点、原因..."
+            placeholder={t('sidebar.search')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="focus:ring-brand-primary/50 w-full rounded-lg bg-white/5 py-2 pr-3 pl-9 text-sm text-gray-200 ring-1 ring-transparent transition-all outline-none focus:bg-white/10"
@@ -88,7 +90,7 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
           className="flex items-center justify-center gap-2 rounded-lg bg-white/5 py-2 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 hover:text-white"
         >
           <MdSdStorage size={16} />
-          <span>选择文件夹 / Select Folder</span>
+          <span>{t('sidebar.selectFolder')}</span>
         </button>
       </div>
 
@@ -98,7 +100,7 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
           {filteredItems.length === 0 ? (
             <div className="mt-10 flex flex-col items-center gap-2 text-neutral-500">
               <FaFilter size={24} />
-              <span className="text-sm">没有找到相关片段</span>
+              <span className="text-sm">{t('sidebar.noResults')}</span>
             </div>
           ) : (
             filteredItems.map((item, i) => (
@@ -115,7 +117,7 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
 
       {/* Footer Info */}
       <div className="border-t border-white/5 p-2 text-center text-[10px] text-neutral-600">
-        {items.length} 个片段 · {filteredItems.length} 个显示
+        {t('sidebar.clipCount', { total: items.length, shown: filteredItems.length })}
       </div>
     </div>
   );

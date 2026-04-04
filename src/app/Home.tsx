@@ -9,6 +9,7 @@ import {
   genFootage,
   revokeFootage,
 } from '../utils';
+import { useI18n } from '../i18n';
 
 type Props = {
   items: CamClip[];
@@ -16,6 +17,7 @@ type Props = {
 };
 
 export function Home({ items, onOpenFolder }: Props) {
+  const { t } = useI18n();
   const [clip, setClip] = useState<CamClip>();
   const [footage, setFootage] = useState<CamFootage>();
 
@@ -52,7 +54,7 @@ export function Home({ items, onOpenFolder }: Props) {
             footage ? (
               <div className="flex h-full min-h-0 w-full flex-col">
                 <div className="animate-fade-in flex min-h-0 flex-1 flex-col justify-center p-4 delay-100">
-                  <Viewer key={clip.name} clip={clip} footage={footage} />
+                  <Viewer key={clip.name} clip={clip} footage={footage} onFootageUpdate={setFootage} />
                 </div>
               </div>
             ) : (
@@ -60,7 +62,7 @@ export function Home({ items, onOpenFolder }: Props) {
                 <div className="flex animate-pulse flex-col items-center gap-4">
                   <div className="border-brand-primary h-12 w-12 animate-spin rounded-full border-2 border-t-transparent" />
                   <span className="text-sm font-medium tracking-wider text-neutral-400">
-                    LOADING FOOTAGE
+                    {t('home.loading')}
                   </span>
                 </div>
               </div>
@@ -77,7 +79,7 @@ export function Home({ items, onOpenFolder }: Props) {
                 </svg>
               </div>
               <div className="text-lg font-light tracking-widest uppercase opacity-50">
-                Select a Clip to Begin
+                {t('home.selectClip')}
               </div>
             </div>
           )}

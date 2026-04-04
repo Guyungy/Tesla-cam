@@ -2,9 +2,16 @@ import {
   VscChromeClose,
   VscChromeMaximize,
   VscChromeMinimize,
+  VscGear,
 } from 'react-icons/vsc';
+import { useState } from 'react';
+import { useI18n } from '../i18n';
+import { Settings } from './Settings';
 
 export function TitleBar() {
+  const { t } = useI18n();
+  const [showSettings, setShowSettings] = useState(false);
+
   const handleMinimize = () => {
     window.electronAPI?.minimize();
   };
@@ -25,11 +32,17 @@ export function TitleBar() {
     <div className="z-50 flex h-8 shrink-0 items-center justify-between bg-black select-none">
       {/* Drag Region */}
       <div className="flex flex-1 items-center px-3 text-xs font-medium text-neutral-500 [-webkit-app-region:drag]">
-        TeslaCam Viewer
+        {t('titleBar.title')}
       </div>
 
       {/* Window Controls (No Drag) */}
       <div className="flex h-full [-webkit-app-region:no-drag]">
+        <button
+          onClick={() => setShowSettings(true)}
+          className="flex w-10 items-center justify-center text-neutral-400 hover:bg-neutral-800 hover:text-white focus:outline-none"
+        >
+          <VscGear size={16} />
+        </button>
         <button
           onClick={handleMinimize}
           className="flex w-10 items-center justify-center text-neutral-400 hover:bg-neutral-800 hover:text-white focus:outline-none"
@@ -49,6 +62,7 @@ export function TitleBar() {
           <VscChromeClose size={16} />
         </button>
       </div>
+      <Settings open={showSettings} onClose={() => setShowSettings(false)} />
     </div>
   );
 }

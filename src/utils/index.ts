@@ -6,6 +6,7 @@ export * from './genFootage';
 export * from './genLocationUrl';
 export * from './getVideoDuration';
 export * from './parseFileType';
+export * from './parseSEI';
 export * from './parseTime';
 export * from './readEvent';
 export * from './types';
