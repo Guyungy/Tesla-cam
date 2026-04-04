@@ -1,88 +1,148 @@
-# 特斯拉行车记录仪查看器（TeslaCam Viewer）
+# Tesla Cinema — TeslaCam Viewer
 
-一个用于本地查看 Tesla 行车记录仪（TeslaCam）素材的跨平台桌面应用，参照特斯拉车机新版操作界面，实现网格视图、多路同步播放、事件点跳转与时间精细控制。
+A modern desktop app for viewing Tesla Dashcam footage with synchronized multi-camera playback, real-time driving telemetry, and H.264 video export.
 
 ![preview](./public/preview.png)
 
----
+## Download
 
-## 使用方式（推荐）
+**No development environment needed.** Download the installer for your platform from [GitHub Releases](https://github.com/Guyungy/Tesla-cam/releases):
 
-**普通用户无需任何开发环境，可直接使用已打包好的应用程序。**
-
-请前往 GitHub Releases 页面下载对应系统版本：
-
-- Windows：`.exe`
-- macOS：`.dmg`（支持 Intel / Apple Silicon）
-
-下载后即可直接运行，无需安装 Node.js 或执行任何构建命令。
+- **Windows**: `.exe` installer
+- **macOS**: `.dmg` (Intel & Apple Silicon)
 
 ---
 
-## 功能详解
+## Features
 
-### 📂 文件管理
+### Multi-Camera Synchronized Playback
 
-- **智能分类**：自动识别视频类型（全部 / 哨兵 / 手动保存）
-- **深度搜索**：支持按日期、城市、街道或触发原因筛选
-- **目录扫描**：可直接打开 TeslaCam 根目录并自动解析
+Perfect frame-level sync across all cameras with multiple viewing modes:
 
-### 📺 播放控制
+| Layout | Description |
+|--------|-------------|
+| **6 Grid** | All 6 cameras in 3×2 grid (including B-pillar) |
+| **4 Grid** | Front / Back / Left / Right in 2×2 grid |
+| **4 Classic** | Front camera top (60%), three cameras bottom |
+| **Single** | Any camera fullscreen — double-click to toggle |
 
-- **多视图模式**
-  - 网格视图：同步查看前 / 后 / 左 / 右四路画面
-  - 单视图：双击任意画面放大或还原
-  - 快速切换：Grid / Front / Back / Left / Right
+Each grid cell shows a camera label (Front / Back / Left / Right / L-Pillar / R-Pillar) for quick identification.
 
-- **快捷操作**
-  - 空格：播放 / 暂停
-  - ← / →：快退 / 快进 5 秒
+### B-Pillar Camera Support
 
-- **精细控制**
-  - 倍速播放：0.5x – 16x
-  - 时间跳转：±15 秒
-  - 一键跳转至事件触发点
+Full coverage including Tesla's interior B-pillar cameras (`left_pillar` / `right_pillar`). Automatically detected — 6-grid layout appears only when B-pillar files are present.
 
-### 📍 位置信息
+### Real-Time Driving Dashboard
 
-- 显示事件发生的城市与街道
-- 支持跳转至地图查看事件坐标
+Auto-parses SEI metadata embedded in Tesla dashcam H.264 streams and displays a live telemetry overlay:
 
-### 💾 导出与截图
+- **Speed** — large gauge with color coding (green / yellow / red)
+- **Gear** — P / R / N / D highlight
+- **Steering angle** — SVG arc indicator with degree readout
+- **Pedals** — throttle (green bar) and brake (red bar)
+- **Autopilot status** — OFF / AP / FSD / TACC badge
+- **GPS coordinates** — latitude / longitude
 
-- **视频导出**
-  - 支持自定义 IN / OUT
-  - 自动合成当前视图（网格或单路）
-  - 最大导出时长 60 秒
-  - 格式优先 MP4（H.264），失败则回退 WebM
+> **Note:** Vehicle metadata is only available in videos recorded with Tesla firmware **2025.44.25** or later on HW3+. SEI data may not be present while parked.
 
-- **画面截图**
-  - 一键导出当前画面为 JPG
+### Speed Curve in Progress Bar
+
+Hover over the timeline to see a speed-over-time sparkline rendered in the progress bar background. Instantly spot hard acceleration, braking, and cruising segments.
+
+### Smart Filtering & Date Grouping
+
+- Filter by type: **All / Sentry / Saved**
+- Search by date, location, or event reason
+- Clips grouped by date: **Today / Yesterday / 2025-04-03...**
+- Event reason displayed on clip cards (e.g., "object detected")
+
+### H.264 Video Export
+
+Export the current view (any layout) as an H.264 MP4 video powered by FFmpeg:
+
+- Set **IN / OUT** points for precise clip trimming (visible as blue range on timeline)
+- Adaptive overlay with timestamp and location (font scales to resolution)
+- All multi-grid layouts export at **1920×1080** (1080p)
+- Export modal shows frame count and estimated remaining time
+- One-click screenshot export (JPEG)
+
+### Driving Data CSV Export
+
+Export complete driving telemetry to CSV for further analysis:
+
+```
+offset_s, speed_kph, gear, steering_deg, brake_pct, throttle_pct, ap_status, latitude, longitude
+```
+
+### Map Integration
+
+- **Auto-detect region**: China coordinates → Amap (高德地图), otherwise → Google Maps
+- Both map links shown simultaneously in the header
+- Click to open exact event location
+
+### Interactive Controls
+
+| Control | Action |
+|---------|--------|
+| `Space` | Play / Pause |
+| `← →` | Seek ±5 seconds |
+| `F` | Toggle fullscreen |
+| `P` | Picture-in-Picture |
+| `M` | Mute / Unmute |
+| `I` / `O` | Set IN / OUT export points |
+| Double-click | Toggle single / grid view |
+| Drag & Drop | Drop a TeslaCam folder onto the window to load |
+
+Playback speed: **0.25x – 8x**
+
+### Bilingual UI (中文 / English)
+
+Full Chinese and English support. Language auto-detected from browser settings, switchable via Settings (gear icon in title bar). Timestamps, labels, and all UI text follow the selected language.
 
 ---
 
-## 开发说明（仅面向开发者）
+## Development
 
-如果你希望研究或学习实现方式，可自行运行源码。
+### Prerequisites
 
-### 启动开发环境
+- Node.js >= 20.12
+- npm
+
+### Setup
+
+```bash
+npm install
+```
+
+### Dev Server
 
 ```bash
 npm run dev
 ```
 
-构建应用
-```bash
-npm run build
-```
+### Build
 
-仅构建 Windows：
 ```bash
+# Windows
 npm run build:win
-```
 
-仅构建 macOS：
-```bash
+# macOS
 npm run build:mac
 ```
 
+Output goes to the `release/` directory.
+
+### Tech Stack
+
+- **Electron 40** — desktop shell
+- **React 19** + **TypeScript 5.8**
+- **Tailwind CSS 4** — styling
+- **Vite 5** — build tool
+- **FFmpeg** (bundled via ffmpeg-static) — H.264 video encoding
+- **Custom SEI parser** — Tesla protobuf metadata decoding (zero dependencies)
+
+---
+
+## License
+
+MIT
