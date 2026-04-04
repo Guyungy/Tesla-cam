@@ -12,6 +12,8 @@ type Props = {
   playbackRate: number;
   full?: boolean;
   className?: string;
+  /** Camera label shown in top-left corner (grid mode) */
+  label?: string;
   onChangeState?: (name: CamName, state: PlayerState) => void;
   onDoubleClick?: () => void;
 };
@@ -25,10 +27,10 @@ export function Player({
   playbackRate,
   full,
   className,
+  label,
   onChangeState,
   onDoubleClick,
 }: Props) {
-  // 视频状态
   const state = useRef<PlayerState>({});
 
   const updateState = useCallback(
@@ -41,7 +43,6 @@ export function Player({
     [onChangeState, unique],
   );
 
-  // url 改变，更新状态
   useEffect(() => {
     updateState?.({
       index,
@@ -50,7 +51,6 @@ export function Player({
     });
   }, [index, updateState, url]);
 
-  // 播放控制
   const syncPlaying = useCallback(() => {
     if (videoRef.current && videoRef.current.src && !state.current.ended) {
       if (playing) {
@@ -62,7 +62,6 @@ export function Player({
   }, [playing, videoRef]);
   useEffect(syncPlaying, [syncPlaying]);
 
-  // 播放速度控制
   const syncPlaybackRate = useCallback(() => {
     if (videoRef.current) {
       videoRef.current.playbackRate = playbackRate;
@@ -104,27 +103,17 @@ export function Player({
             updateState({ ended: true });
           }}
           className="max-h-full max-w-full object-contain"
-          // crossOrigin="anonymous" // Removed to prevent potential CORS issues with local files
         />
       ) : (
-        <div className="h-full w-full bg-black"></div>
+        <div className="h-full w-full bg-black" />
+      )}
+
+      {/* Camera name label */}
+      {label && (
+        <div className="pointer-events-none absolute top-1.5 left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-white/70">
+          {label}
+        </div>
       )}
     </div>
   );
 }
-
-// ($.setSrc)
-// (onEmptied)
-// (onTimeUpdate 0)
-// onLoadStart
-// onDurationChange
-// onLoadedMetadata
-// onProgress
-// onSuspend
-// onLoadedData
-// onCanPlay (onCanPlayThrough)
-// onPlay
-// onPlaying
-// onTimeUpdate
-// onPause
-// onEnded

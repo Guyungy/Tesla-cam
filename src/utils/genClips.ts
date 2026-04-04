@@ -7,7 +7,7 @@ import type { CamClip } from './types';
 
 const recentDirName = 'RecentClips';
 
-export async function genClips(files: FileList): Promise<CamClip[]> {
+export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
   const map: Record<string, CamClip> = {};
 
   for (const file of files) {

@@ -1,8 +1,10 @@
 import clsx from 'clsx';
+import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { FaSearch, FaFilter } from 'react-icons/fa';
 import { MdLocalMovies, MdSecurity, MdSdStorage } from 'react-icons/md';
 import type { CamClip, ClipType } from '../utils';
+import { parseTime } from '../utils';
 import { Clip } from './Clip';
 import { useI18n } from '../i18n';
 
@@ -15,6 +17,11 @@ type Props = {
 
 type FilterType = ClipType | 'all';
 
+type DateGroup = {
+  label: string;
+  clips: CamClip[];
+};
+
 export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
   const { t } = useI18n();
   const [filter, setFilter] = useState<FilterType>('all');
@@ -23,28 +30,57 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
       const matchType = filter === 'all' || item.type === filter;
-
       const searchLower = search.toLowerCase();
-      // Searchable fields: name (timestamp), specific format, city, street, reason
       const name = item.name.toLowerCase();
       const city = item.event?.city?.toLowerCase() || '';
       const street = item.event?.street?.toLowerCase() || '';
       const reason = item.event?.reason?.toLowerCase() || '';
-
-      // Allow searching by simple date parts (e.g. "2023-05", "14:30")
-      // item.name is usually "YYYY-MM-DD_HH-mm-ss"
       const formattedName = name.replace(/_/g, ' ').replace(/-/g, ':');
-
       const matchSearch =
+        !searchLower ||
         name.includes(searchLower) ||
         formattedName.includes(searchLower) ||
         city.includes(searchLower) ||
         street.includes(searchLower) ||
         reason.includes(searchLower);
-
       return matchType && matchSearch;
     });
   }, [items, filter, search]);
+
+  // Group filtered items by date
+  const dateGroups = useMemo<DateGroup[]>(() => {
+    const today = dayjs().startOf('day');
+    const yesterday = today.subtract(1, 'day');
+    const dateFmt = t('format.dateGroup');
+
+    const groupMap = new Map<string, { label: string; clips: CamClip[]; sortKey: string }>();
+
+    for (const clip of filteredItems) {
+      const timeStr = parseTime(clip.name);
+      const d = dayjs(timeStr);
+      const dayStart = d.startOf('day');
+      const dateKey = d.format('YYYY-MM-DD');
+
+      let label: string;
+      if (dayStart.isSame(today)) {
+        label = t('sidebar.today');
+      } else if (dayStart.isSame(yesterday)) {
+        label = t('sidebar.yesterday');
+      } else {
+        label = d.format(dateFmt);
+      }
+
+      const existing = groupMap.get(dateKey);
+      if (existing) {
+        existing.clips.push(clip);
+      } else {
+        groupMap.set(dateKey, { label, clips: [clip], sortKey: dateKey });
+      }
+    }
+
+    // Sort groups by date descending (newest first)
+    return Array.from(groupMap.values()).sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+  }, [filteredItems, t]);
 
   const tabs = [
     { id: 'all', label: t('sidebar.all'), icon: MdSdStorage },
@@ -94,25 +130,34 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
         </button>
       </div>
 
-      {/* List Area */}
+      {/* List Area with Date Groups */}
       <div className="flex-1 overflow-y-auto px-2 pb-4">
-        <div className="flex flex-col gap-1">
-          {filteredItems.length === 0 ? (
-            <div className="mt-10 flex flex-col items-center gap-2 text-neutral-500">
-              <FaFilter size={24} />
-              <span className="text-sm">{t('sidebar.noResults')}</span>
+        {filteredItems.length === 0 ? (
+          <div className="mt-10 flex flex-col items-center gap-2 text-neutral-500">
+            <FaFilter size={24} />
+            <span className="text-sm">{t('sidebar.noResults')}</span>
+          </div>
+        ) : (
+          dateGroups.map((group) => (
+            <div key={group.label} className="mb-2">
+              {/* Date header */}
+              <div className="sticky top-0 z-10 bg-neutral-900/90 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-neutral-500 backdrop-blur-sm">
+                {group.label}
+                <span className="ml-2 text-neutral-600">{group.clips.length}</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                {group.clips.map((item, i) => (
+                  <Clip
+                    key={`${group.label}-${i}`}
+                    item={item}
+                    active={item.name === activeClip?.name}
+                    onClick={() => onSelect(item)}
+                  />
+                ))}
+              </div>
             </div>
-          ) : (
-            filteredItems.map((item, i) => (
-              <Clip
-                key={i}
-                item={item}
-                active={item.name === activeClip?.name}
-                onClick={() => onSelect(item)}
-              />
-            ))
-          )}
-        </div>
+          ))
+        )}
       </div>
 
       {/* Footer Info */}

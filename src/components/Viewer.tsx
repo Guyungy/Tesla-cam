@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IoPause, IoPlay } from 'react-icons/io5';
+import { IoPause, IoPlay, IoVolumeHigh, IoVolumeMute } from 'react-icons/io5';
 import { MdReplay, MdPictureInPicture } from 'react-icons/md';
 import { RiForward15Fill, RiReplay15Fill } from 'react-icons/ri';
 import clsx from 'clsx';
@@ -12,6 +12,7 @@ import {
   type CamFootage,
   type CamName,
   extractFootageSEI,
+  formatDuration,
   genAllMapLinks,
   parseTime,
   type PlayerState,
@@ -121,9 +122,10 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       .filter((i) => i.index === segmentIndex)
       .map((i) => i.currentTime || 0),
   );
+  const timestampFmt = t('format.timestamp');
   const formatTime = dayjs(parseTime(segment.name))
     .add(segmentPlayedSeconds, 'second')
-    .format('YYYY年MM月DD日 ddd HH:mm:ss');
+    .format(timestampFmt);
 
   const locationText = useMemo(() => {
     if (!clip.event) return t('viewer.noLocation');
@@ -149,16 +151,22 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     seiLoadingRef.current = true;
 
     let cancelled = false;
+    console.log('[SEI] Starting metadata extraction for', clip.videos.length, 'video files...');
     extractFootageSEI(clip.videos, footage).then((seiData) => {
       if (cancelled) return;
       seiLoadingRef.current = false;
-      if (seiData && onFootageUpdate) {
-        onFootageUpdate({ ...footage, seiData });
+      if (seiData) {
+        console.log('[SEI] Found', seiData.length, 'data points');
+        if (onFootageUpdate) {
+          onFootageUpdate({ ...footage, seiData });
+        }
+      } else {
+        console.log('[SEI] No metadata found (video may be from firmware < 2025.44.25)');
       }
     }).catch((e) => {
       if (cancelled) return;
       seiLoadingRef.current = false;
-      console.warn('SEI extraction failed:', e);
+      console.warn('[SEI] Extraction failed:', e);
     });
 
     return () => { cancelled = true; };
@@ -258,9 +266,20 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     });
   }, [hasPillarCams]);
 
+  // ── Volume Control ──
+  const [muted, setMuted] = useState(true);
+  useEffect(() => {
+    players.forEach((p) => {
+      if (p.current) p.current.muted = muted;
+    });
+  }, [muted, players]);
+
   // ── Export Logic ──
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  const [exportFrameCount, setExportFrameCount] = useState(0);
+  const [exportEta, setExportEta] = useState<string>();
+  const [exportEncoding, setExportEncoding] = useState(false);
   const [exportIn, setExportIn] = useState<number>();
   const [exportOut, setExportOut] = useState<number>();
   const isCancelingRef = useRef(false);
@@ -318,6 +337,10 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         case 'KeyO':
           event.preventDefault();
           markExportOut();
+          break;
+        case 'KeyM':
+          event.preventDefault();
+          setMuted((m) => !m);
           break;
       }
     },
@@ -407,23 +430,41 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         }
       }
 
-      // Overlay
+      // Overlay — scale font size proportionally to canvas width
       const { time, location } = overlayRef.current;
-      const padding = 40;
+      const scale = width / 1280; // Base scale: 1280px = 1x
+      const padding = Math.round(40 * scale);
+      const titleSize = Math.round(56 * scale);   // Large, bold time
+      const subtitleSize = Math.round(40 * scale); // Location text
+      const innerPad = Math.round(28 * scale);
       const boxWidth = width - padding * 2;
-      const boxHeight = 120;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(padding, padding, boxWidth, boxHeight);
-      ctx.fillStyle = '#e5e5e5';
-      ctx.font = 'bold 36px Inter, sans-serif';
-      ctx.fillText(time, padding + 24, padding + 56);
-      ctx.font = '28px Inter, sans-serif';
+      const boxHeight = Math.round((titleSize + subtitleSize + innerPad * 2.5));
+
+      // Background box with rounded-ish look
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.beginPath();
+      const r = Math.round(12 * scale);
+      ctx.roundRect(padding, padding, boxWidth, boxHeight, r);
+      ctx.fill();
+
+      // Time text
+      ctx.fillStyle = '#f5f5f5';
+      ctx.font = `bold ${titleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+      ctx.fillText(time, padding + innerPad, padding + innerPad + titleSize * 0.82);
+
+      // Location text
       ctx.fillStyle = '#a3a3a3';
-      ctx.fillText(location, padding + 24, padding + 100);
+      ctx.font = `${subtitleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+      ctx.fillText(location, padding + innerPad, padding + innerPad + titleSize + subtitleSize * 0.95);
     },
     [refMap, overlayRef],
   );
 
+  /**
+   * Resolve export canvas size.
+   * Multi-grid layouts are capped at 1920×1080 (1080p) to keep file sizes reasonable.
+   * Single camera exports use the native video resolution.
+   */
   const resolveCanvasSize = useCallback(() => {
     const baseVideo = frontRef.current || backRef.current;
     const fallbackWidth = 1280;
@@ -432,13 +473,33 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     const baseHeight = baseVideo?.videoHeight || fallbackHeight;
 
     switch (viewType) {
-      case 'grid6':
-        return { width: baseWidth * 3, height: baseHeight * 2 };
-      case 'grid4':
-        return { width: baseWidth * 2, height: baseHeight * 2 };
-      case 'grid4old':
-        return { width: baseWidth * 2, height: Math.round(baseHeight * 2.67) };
+      case 'grid6': {
+        // 3×2 grid → 1920×1080 (standard 1080p)
+        const w = 1920;
+        const h = 1080;
+        return { width: w, height: h };
+      }
+      case 'grid4': {
+        // 2×2 grid → 1920×1080
+        const w = 1920;
+        const h = 1080;
+        return { width: w, height: h };
+      }
+      case 'grid4old': {
+        // Classic layout (front top + 3 bottom) → 1920×1080
+        const w = 1920;
+        const h = 1080;
+        return { width: w, height: h };
+      }
       default:
+        // Single camera: use native resolution, capped at 1920 wide
+        if (baseWidth > 1920) {
+          const scale = 1920 / baseWidth;
+          const w = 1920;
+          const h = Math.round(baseHeight * scale);
+          // H.264 requires even dimensions
+          return { width: w, height: h % 2 === 0 ? h : h + 1 };
+        }
         return { width: baseWidth, height: baseHeight };
     }
   }, [viewType]);
@@ -523,7 +584,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
   const waitForVideoReady = (video: HTMLVideoElement, timeoutMs = 5000): Promise<void> => {
     return new Promise((resolve) => {
       if (video.readyState >= 2) { resolve(); return; }
-      const timer = setTimeout(resolve, timeoutMs); // Don't block forever
+      const timer = setTimeout(resolve, timeoutMs);
       const onReady = () => {
         clearTimeout(timer);
         video.removeEventListener('canplay', onReady);
@@ -535,13 +596,34 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     });
   };
 
-  // ── Video Export ──
+  /** Convert canvas to JPEG Uint8Array for IPC transfer */
+  const canvasToJpegBytes = (canvas: HTMLCanvasElement): Promise<Uint8Array> => {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error('toBlob failed')); return; }
+          blob.arrayBuffer().then((ab) => resolve(new Uint8Array(ab))).catch(reject);
+        },
+        'image/jpeg',
+        0.92,
+      );
+    });
+  };
+
+  // ── Video Export (FFmpeg H.264) ──
   const exportCurrentView = useCallback(async () => {
     if (exporting) return;
     if (exportableSeconds <= 0) {
       setToastMsg(t('toast.noContent'));
       return;
     }
+    if (!window.electronAPI?.exportStart) {
+      setToastMsg(t('toast.exportFailed'));
+      return;
+    }
+
+    const sessionId = `export-${Date.now()}`;
+    const prevPlaybackRate = playbackRate;
 
     try {
       const exportStartSeconds =
@@ -551,16 +633,15 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       const seekInfo = calcSeekInfo(footage, exportStartSeconds);
       if (!seekInfo) throw new Error('Could not seek to export start time');
 
-      // 1. Pause playback and force rate to 1x
-      const prevPlaybackRate = playbackRate;
+      // 1. Pause and set rate to 1x
       setPlaying(false);
       setPlaybackRate(1);
 
-      // 2. Set segment and wait for React to apply it
+      // 2. Set segment, wait for React
       setSegmentIndex(seekInfo.index);
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 150));
 
-      // 3. Seek all videos to exact start time and wait for frame data
+      // 3. Seek all videos and wait for frame data
       const activeVideos: HTMLVideoElement[] = [];
       for (const p of players) {
         if (p.current && p.current.src) {
@@ -569,8 +650,6 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
           activeVideos.push(p.current);
         }
       }
-
-      // Wait for all videos to have frame data loaded
       await Promise.all(activeVideos.map((v) => waitForVideoReady(v)));
 
       // 4. Start playback
@@ -578,17 +657,9 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         try { await v.play(); } catch (_) { /* ignore */ }
       }
       setPlaying(true);
-
-      // Wait 2 extra frames so the first canvas draw has real video pixels
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-      const exportStartTimeText = dayjs(
-        parseTime(footage.segments[seekInfo.index].name),
-      )
-        .add(seekInfo.seconds, 'second')
-        .format('YYYY年MM月DD日 ddd HH:mm:ss');
-      overlayRef.current = { time: exportStartTimeText, location: locationText };
-
+      // 5. Canvas setup
       const { width, height } = resolveCanvasSize();
       const canvas = document.createElement('canvas');
       canvas.width = width;
@@ -596,129 +667,133 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Failed to create canvas context');
 
-      // 5. Draw initial frame to verify canvas has content
-      drawFrame(ctx, width, height, viewType);
+      overlayRef.current = {
+        time: dayjs(parseTime(footage.segments[seekInfo.index].name))
+          .add(seekInfo.seconds, 'second')
+          .format(timestampFmt),
+        location: locationText,
+      };
 
-      // 6. Set up recording stream
-      const captureFps = 30;
-      const stream = canvas.captureStream(captureFps);
+      const fps = 30;
+      const fileName = `${clip.name}-${viewType}.mp4`;
 
-      const mimeCandidates = [
-        'video/webm;codecs=vp9',
-        'video/webm;codecs=vp8',
-        'video/webm',
-        'video/mp4',
-      ];
-      const mimeType = mimeCandidates.find((m) =>
-        MediaRecorder.isTypeSupported(m),
-      );
-      if (!mimeType) {
-        setToastMsg(t('toast.exportFailed'));
+      // 6. Start FFmpeg session (shows save dialog)
+      const startResult = await window.electronAPI.exportStart({
+        sessionId, fileName, width, height, fps,
+      });
+      if (!startResult.ok) {
         setPlaybackRate(prevPlaybackRate);
+        if (startResult.error !== 'canceled') {
+          setToastMsg(t('toast.exportFailedStart', { error: startResult.error || 'unknown' }));
+        }
         return;
       }
 
-      const recorder = new MediaRecorder(stream, {
-        mimeType,
-        videoBitsPerSecond: 8_000_000,
-      });
-
-      const chunks: BlobPart[] = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
-      recorder.onerror = (e) => {
-        console.error('Recorder error', e);
-        setExporting(false);
-        setPlaybackRate(prevPlaybackRate);
-        setToastMsg(t('toast.exportFailedRecording'));
-      };
-      recorder.onstop = async () => {
-        // Pause playback and restore rate
-        setPlaying(false);
-        setPlaybackRate(prevPlaybackRate);
-        if (isCancelingRef.current) {
-          setExporting(false);
-          setExportProgress(0);
-          return;
-        }
-        try {
-          const blob = new Blob(chunks, { type: mimeType });
-          if (blob.size <= 0) {
-            setExporting(false);
-            setToastMsg(t('toast.exportFailedEmpty'));
-            return;
-          }
-          const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-          const fileName = `${clip.name}-${viewType}.${ext}`;
-          const arrayBuffer = await blob.arrayBuffer();
-          const path = await window.electronAPI?.saveFile(fileName, arrayBuffer);
-          setExporting(false);
-          setExportProgress(0);
-          if (path) {
-            setToastMsg(t('toast.videoSaved'));
-            window.electronAPI?.showItemInFolder(path);
-          }
-        } catch (e: any) {
-          console.error('Save failed', e);
-          setExporting(false);
-          setToastMsg(`Save failed: ${e.message}`);
-        }
-      };
-
-      // 7. Start recording — use small timeslice for frequent data chunks
       setExporting(true);
       setExportProgress(0);
+      setExportFrameCount(0);
+      setExportEta(undefined);
+      setExportEncoding(false);
       isCancelingRef.current = false;
-      recorder.start(200); // Flush data every 200ms to prevent empty chunks
 
+      // 7. Capture frames at target FPS using requestAnimationFrame
       const exportSegmentStartName = footage.segments[seekInfo.index].name;
       const exportSeekSeconds = seekInfo.seconds;
+      const frameDurationMs = 1000 / fps;
+      const totalFrames = Math.ceil(exportableSeconds * fps);
 
       const start = performance.now();
-      const step = () => {
-        if (isCancelingRef.current) {
-          if (recorder.state === 'recording') recorder.stop();
-          return;
-        }
-        if (recorder.state !== 'recording') return;
-        try {
+      let frameIndex = 0;
+
+      const captureLoop = async () => {
+        while (frameIndex < totalFrames) {
+          if (isCancelingRef.current) {
+            window.electronAPI!.exportCancel(sessionId);
+            setExporting(false);
+            setExportProgress(0);
+            setPlaying(false);
+            setPlaybackRate(prevPlaybackRate);
+            return;
+          }
+
           const elapsed = (performance.now() - start) / 1000;
-          setExportProgress(Math.min(100, (elapsed / exportableSeconds) * 100));
+          const pct = Math.min(99, (frameIndex / totalFrames) * 100);
+          setExportProgress(pct);
+          setExportFrameCount(frameIndex);
 
-          const currentExportTime = dayjs(parseTime(exportSegmentStartName))
-            .add(exportSeekSeconds + elapsed, 'second')
-            .format('YYYY年MM月DD日 ddd HH:mm:ss');
-          overlayRef.current = { time: currentExportTime, location: locationText };
-
-          drawFrame(ctx, width, height, viewType);
-          if (elapsed < exportableSeconds) {
-            requestAnimationFrame(step);
-          } else {
-            if (recorder.state === 'recording') {
-              recorder.requestData(); // Flush remaining data
-              // Small delay to let last data event fire
-              setTimeout(() => {
-                if (recorder.state === 'recording') recorder.stop();
-              }, 300);
+          // Compute ETA
+          if (frameIndex > 5 && elapsed > 0) {
+            const framesPerSec = frameIndex / elapsed;
+            const remaining = (totalFrames - frameIndex) / framesPerSec;
+            if (remaining > 60) {
+              setExportEta(`${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`);
+            } else {
+              setExportEta(`${Math.round(remaining)}s`);
             }
           }
-        } catch (err: any) {
-          console.error('Drawing error', err);
-          if (recorder.state === 'recording') recorder.stop();
-          setToastMsg(`Export error: ${err.message}`);
+
+          // Update overlay time
+          const currentExportTime = dayjs(parseTime(exportSegmentStartName))
+            .add(exportSeekSeconds + elapsed, 'second')
+            .format(timestampFmt);
+          overlayRef.current = { time: currentExportTime, location: locationText };
+
+          // Draw and capture frame
+          drawFrame(ctx, width, height, viewType);
+          const jpegBytes = await canvasToJpegBytes(canvas);
+          await window.electronAPI!.exportFrame(sessionId, jpegBytes);
+
+          frameIndex++;
+
+          // Wait for next frame timing
+          const nextFrameTime = start + frameIndex * frameDurationMs;
+          const waitMs = nextFrameTime - performance.now();
+          if (waitMs > 0) {
+            await new Promise((r) => setTimeout(r, waitMs));
+          } else {
+            // Yield to browser to keep UI responsive
+            await new Promise((r) => requestAnimationFrame(r));
+          }
+        }
+
+        // 8. Finish encoding
+        setExportProgress(100);
+        setExportEta(undefined);
+        setExportEncoding(true);
+        const result = await window.electronAPI!.exportFinish(sessionId);
+
+        setPlaying(false);
+        setPlaybackRate(prevPlaybackRate);
+        setExporting(false);
+        setExportProgress(0);
+
+        if (result.ok && result.filePath) {
+          setToastMsg(t('toast.videoSaved'));
+          window.electronAPI!.showItemInFolder(result.filePath);
+        } else {
+          setToastMsg(t('toast.exportFailedEmpty'));
+          console.error('FFmpeg export failed:', result.error);
         }
       };
-      step();
+
+      captureLoop().catch((err) => {
+        console.error('Export loop failed:', err);
+        window.electronAPI?.exportCancel(sessionId);
+        setExporting(false);
+        setPlaying(false);
+        setPlaybackRate(prevPlaybackRate);
+        setToastMsg(t('toast.exportError', { error: err.message }));
+      });
     } catch (e: any) {
       console.error('Export start failed', e);
       setExporting(false);
-      setToastMsg(`Export failed to start: ${e.message}`);
+      setPlaybackRate(prevPlaybackRate);
+      setToastMsg(t('toast.exportFailedStart', { error: e.message }));
     }
   }, [
     clip.name, footage, clipPlayedSeconds, exportIn, exportSelectionSeconds,
     exportableSeconds, exporting, playbackRate, drawFrame, locationText,
-    resolveCanvasSize, viewType, players,
+    resolveCanvasSize, viewType, players, t, timestampFmt,
   ]);
 
   // ── Map Links ──
@@ -732,7 +807,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     switch (viewType) {
       case 'grid6': return 'grid grid-cols-3 grid-rows-2';
       case 'grid4': return 'grid grid-cols-2 grid-rows-2';
-      case 'grid4old': return 'grid grid-cols-1 grid-rows-[3fr_2fr]';
+      case 'grid4old': return 'flex flex-col';
       default: return 'flex items-center justify-center';
     }
   }, [viewType]);
@@ -747,6 +822,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       playbackRate={playbackRate}
       full={isSingleView && viewType === cam}
       className={extraClass}
+      label={isSingleView ? undefined : CAM_LABELS[cam]}
       onChangeState={handleChangeState}
       unique={cam}
       index={segmentIndex}
@@ -757,9 +833,16 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
   ), [segment, playing, playbackRate, isSingleView, viewType, handleChangeState, segmentIndex, refMap, hasPillarCams]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="animate-fade-in flex h-full min-h-0 flex-col gap-3">
       <Toast message={toastMsg} onClose={() => setToastMsg(null)} />
-      <ExportModal open={exporting} progress={exportProgress} onCancel={cancelExport} />
+      <ExportModal
+        open={exporting}
+        progress={exportProgress}
+        frameCount={exportFrameCount}
+        eta={exportEta}
+        encoding={exportEncoding}
+        onCancel={cancelExport}
+      />
 
       {/* Header Overlays */}
       <div className="pointer-events-none absolute top-6 left-6 z-20 flex flex-col gap-1 drop-shadow-lg">
@@ -831,15 +914,21 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
 
           {viewType === 'grid4old' && (
             <>
-              {/* Top row: front full width */}
-              <div className="border-b border-white/5">
+              {/* Top: front camera — takes 60% height, full width */}
+              <div className="relative h-[60%] w-full border-b border-white/5">
                 {renderPlayer('front')}
               </div>
-              {/* Bottom row: 3 cameras */}
-              <div className="grid grid-cols-3">
-                {renderPlayer('left', 'border-r border-white/5')}
-                {renderPlayer('back', 'border-r border-white/5')}
-                {renderPlayer('right')}
+              {/* Bottom: 3 cameras side by side — takes 40% height */}
+              <div className="flex h-[40%] w-full">
+                <div className="relative h-full w-1/3 border-r border-white/5">
+                  {renderPlayer('left')}
+                </div>
+                <div className="relative h-full w-1/3 border-r border-white/5">
+                  {renderPlayer('back')}
+                </div>
+                <div className="relative h-full w-1/3">
+                  {renderPlayer('right')}
+                </div>
               </div>
             </>
           )}
@@ -886,21 +975,19 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       <div className="glass-panel mx-auto flex w-full max-w-4xl flex-col gap-3 rounded-2xl p-4">
         {/* Timeline */}
         <div className="flex items-center gap-3 text-xs font-medium text-neutral-500">
-          <span>
-            {dayjs().startOf('day').add(clipPlayedSeconds, 's').format('mm:ss')}
-          </span>
+          <span>{formatDuration(clipPlayedSeconds)}</span>
           <div className="flex-1">
             <Progress
               value={clipPlayedSeconds}
               max={footage.duration}
               mark={eventSeconds}
+              exportIn={exportIn}
+              exportOut={exportOut}
               speedData={footage.seiData}
               onChange={seek}
             />
           </div>
-          <span>
-            {dayjs().startOf('day').add(footage.duration, 's').format('mm:ss')}
-          </span>
+          <span>{formatDuration(footage.duration)}</span>
         </div>
 
         {/* Buttons */}
@@ -979,16 +1066,31 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
               </button>
             )}
             <Rate value={playbackRate} onChange={setPlaybackRate} />
+            <button
+              onClick={() => setMuted((m) => !m)}
+              className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white"
+              title={muted ? t('viewer.unmute') : t('viewer.mute')}
+            >
+              {muted ? <IoVolumeMute size={18} /> : <IoVolumeHigh size={18} />}
+            </button>
           </div>
         </div>
 
-        {/* Keyboard shortcuts hint */}
-        <div className="flex justify-center gap-4 text-[9px] text-neutral-600">
-          <span>{t('viewer.hint.playPause')}</span>
-          <span>{t('viewer.hint.seek')}</span>
-          <span>{t('viewer.hint.fullscreen')}</span>
-          <span>{t('viewer.hint.pip')}</span>
-          <span>{t('viewer.hint.inOut')}</span>
+        {/* Keyboard shortcuts — hover tooltip */}
+        <div className="group/kb relative flex justify-center">
+          <span className="cursor-default text-[10px] text-neutral-600 transition-colors group-hover/kb:text-neutral-400">
+            ⌨
+          </span>
+          <div className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-900 px-4 py-2 shadow-xl ring-1 ring-white/10 group-hover/kb:block">
+            <div className="flex gap-4 text-[10px] text-neutral-400">
+              <span>{t('viewer.hint.playPause')}</span>
+              <span>{t('viewer.hint.seek')}</span>
+              <span>M: {t('viewer.mute')}</span>
+              <span>{t('viewer.hint.fullscreen')}</span>
+              <span>{t('viewer.hint.pip')}</span>
+              <span>{t('viewer.hint.inOut')}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

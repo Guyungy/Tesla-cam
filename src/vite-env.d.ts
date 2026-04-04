@@ -6,6 +6,27 @@ interface Window {
     maximize: () => void;
     close: () => void;
     saveFile: (name: string, buffer: ArrayBuffer) => Promise<string | null>;
-    showItemInFolder: (path: string) => Promise<void>;
+    showItemInFolder: (path: string) => void;
+
+    // FFmpeg video export
+    exportStart: (opts: {
+      sessionId: string;
+      fileName: string;
+      width: number;
+      height: number;
+      fps: number;
+    }) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
+    exportFrame: (sessionId: string, frameData: Uint8Array) => Promise<{
+      ok: boolean;
+      frameNum?: number;
+      error?: string;
+    }>;
+    exportFinish: (sessionId: string) => Promise<{
+      ok: boolean;
+      filePath?: string;
+      error?: string;
+      frameCount?: number;
+    }>;
+    exportCancel: (sessionId: string) => void;
   };
 }

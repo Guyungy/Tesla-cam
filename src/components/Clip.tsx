@@ -8,57 +8,49 @@ import { useI18n } from '../i18n';
 
 type Props = {
   item: CamClip;
-  active?: boolean;
-  onClick?: () => void;
+  active: boolean;
+  onClick: () => void;
 };
 
 export function Clip({ item, active, onClick }: Props) {
   const { t } = useI18n();
-  const timeStr = parseTime(item.name);
-  const dateObj = dayjs(timeStr);
-  const date = dateObj.format('MM/DD');
-  const time = dateObj.format('HH:mm');
-
-  const location =
-    [item.event?.city, item.event?.street].filter(Boolean).join(' ') ||
-    t('sidebar.unknownLocation');
+  const time = dayjs(parseTime(item.name));
+  const location = item.event
+    ? [item.event.city, item.event.street].filter(Boolean).join(' ') || t('sidebar.unknownLocation')
+    : t('sidebar.unknownLocation');
 
   return (
-    <div
+    <button
       className={clsx(
-        'group relative flex cursor-pointer items-start gap-3 rounded-lg p-2.5 transition-all',
+        'group flex w-full gap-3 rounded-lg p-2 text-left transition-all',
         active
-          ? 'bg-gradient-to-r from-red-900/20 to-transparent'
+          ? 'bg-brand-primary/10 ring-brand-primary/30 ring-1'
           : 'hover:bg-white/5',
       )}
       onClick={onClick}
     >
-      {/* Active Indicator Bar */}
-      {active && (
-        <div className="bg-brand-primary absolute top-2 left-0 h-[calc(100%-16px)] w-0.5 rounded-full shadow-[0_0_8px_rgba(232,33,39,0.5)]" />
-      )}
-
-      <div className="shrink-0 overflow-hidden rounded-md border border-white/10 transition-colors group-hover:border-white/20">
+      {/* Thumbnail — fixed 16:9 ratio */}
+      <div className="h-14 w-24 flex-shrink-0 overflow-hidden rounded-md bg-neutral-800">
         <Thumb file={item.thumb} />
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-center justify-between">
-          <span
-            className={clsx(
-              'text-sm font-medium tabular-nums',
-              active ? 'text-white' : 'text-neutral-300',
-            )}
-          >
-            {date} <span className="text-brand-primary opacity-80">{time}</span>
+      {/* Info */}
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium text-neutral-200">
+            {time.format(t('format.clipDate'))}
           </span>
           <ClipType clip={item} />
         </div>
-
-        <div className="truncate text-xs text-neutral-500 transition-colors group-hover:text-neutral-400">
+        <span className="truncate text-xs text-neutral-500">
           {location}
-        </div>
+        </span>
+        {item.event?.reason && (
+          <span className="truncate text-[10px] text-neutral-600 italic">
+            {item.event.reason}
+          </span>
+        )}
       </div>
-    </div>
+    </button>
   );
 }

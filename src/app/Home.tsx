@@ -13,10 +13,11 @@ import { useI18n } from '../i18n';
 
 type Props = {
   items: CamClip[];
+  lastFolder?: string | null;
   onOpenFolder: () => void;
 };
 
-export function Home({ items, onOpenFolder }: Props) {
+export function Home({ items, lastFolder, onOpenFolder }: Props) {
   const { t } = useI18n();
   const [clip, setClip] = useState<CamClip>();
   const [footage, setFootage] = useState<CamFootage>();
@@ -37,7 +38,7 @@ export function Home({ items, onOpenFolder }: Props) {
     <div className="bg-surface-base flex h-screen w-screen flex-col overflow-hidden text-gray-200">
       <TitleBar />
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar with Glass Effect */}
+        {/* Sidebar */}
         <Sidebar
           items={items}
           activeClip={clip}
@@ -47,7 +48,6 @@ export function Home({ items, onOpenFolder }: Props) {
 
         {/* Main Content Area */}
         <div className="from-surface-base relative flex flex-1 flex-col overflow-hidden bg-gradient-to-br to-[#111]">
-          {/* Top Gradient Overlay */}
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-gradient-to-b from-black/50 to-transparent" />
 
           {clip ? (
@@ -68,19 +68,22 @@ export function Home({ items, onOpenFolder }: Props) {
               </div>
             )
           ) : (
-            <div className="flex flex-1 flex-col items-center justify-center gap-4 text-neutral-600 select-none">
-              <div className="text-6xl text-neutral-800">
-                <svg
-                  className="h-24 w-24"
-                  fill="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
-                </svg>
-              </div>
+            <div className="flex flex-1 flex-col items-center justify-center gap-6 text-neutral-600 select-none">
+              <svg className="h-24 w-24 text-neutral-800" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+              </svg>
               <div className="text-lg font-light tracking-widest uppercase opacity-50">
                 {t('home.selectClip')}
               </div>
+              {lastFolder && items.length === 0 && (
+                <button
+                  onClick={onOpenFolder}
+                  className="mt-2 flex flex-col items-center gap-1 rounded-lg border border-white/10 px-6 py-3 text-neutral-500 transition-colors hover:border-white/20 hover:text-neutral-300"
+                >
+                  <span className="text-xs uppercase tracking-wider">{t('sidebar.selectFolder')}</span>
+                  <span className="text-[10px] text-neutral-600">{lastFolder}</span>
+                </button>
+              )}
             </div>
           )}
         </div>
