@@ -15,10 +15,14 @@ export function Toast({ message, onClose, duration = 3000 }: Props) {
       setVisible(true);
       const timer = setTimeout(() => {
         setVisible(false);
-        const closeTimer = setTimeout(onClose, 300); // Wait for fade out
-        return () => clearTimeout(closeTimer);
       }, duration);
-      return () => clearTimeout(timer);
+      const closeTimer = setTimeout(() => {
+        onClose();
+      }, duration + 300); // Wait for fade out animation
+      return () => {
+        clearTimeout(timer);
+        clearTimeout(closeTimer);
+      };
     }
   }, [message, duration, onClose]);
 

@@ -35,6 +35,9 @@ export function calcEventSeconds(clip: CamClip, footage: CamFootage) {
     eventSeconds -= 5;
   }
 
+  // Clamp to valid range
+  eventSeconds = Math.max(0, eventSeconds);
+
   if (eventSeconds > footage.duration) {
     return;
   }

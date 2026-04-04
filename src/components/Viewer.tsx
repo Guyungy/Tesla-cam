@@ -129,7 +129,7 @@ export function Viewer({ clip, footage }: Props) {
   const handleKeyboardControl = useCallback(
     (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA'].includes(target.tagName)) return;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 
       if (event.code === 'Space') {
         event.preventDefault();
@@ -259,7 +259,7 @@ export function Viewer({ clip, footage }: Props) {
       ctx.fillStyle = '#a3a3a3';
       ctx.fillText(location, padding + 24, padding + 100);
     },
-    [backPreviewRef, overlayRef, rightPreviewRef, viewType],
+    [backPreviewRef, frontPreviewRef, leftPreviewRef, overlayRef, rightPreviewRef, viewType],
   );
 
   const resolveCanvasSize = useCallback(() => {
@@ -346,10 +346,29 @@ export function Viewer({ clip, footage }: Props) {
       const seekInfo = calcSeekInfo(footage, exportStartSeconds);
       if (!seekInfo) throw new Error('Could not seek to export start time');
 
+      // Force playback rate to 1x during export so elapsed time matches video time
+      const prevPlaybackRate = playbackRate;
+      setPlaybackRate(1);
+
       setSegmentIndex(seekInfo.index);
+      // Wait a frame for React to commit the segment change before seeking
+      await new Promise((r) => requestAnimationFrame(r));
+
       players.forEach((i) => {
-        if (i.current) i.current.currentTime = seekInfo.seconds;
+        if (i.current) {
+          i.current.playbackRate = 1;
+          i.current.currentTime = seekInfo.seconds;
+        }
       });
+
+      // Ensure videos are playing during export
+      setPlaying(true);
+      await new Promise((r) => requestAnimationFrame(r));
+      for (const p of players) {
+        if (p.current && p.current.src && p.current.paused) {
+          try { await p.current.play(); } catch (_) { /* ignore */ }
+        }
+      }
 
       const exportStartTimeText = dayjs(
         parseTime(footage.segments[seekInfo.index].name),
@@ -399,9 +418,12 @@ export function Viewer({ clip, footage }: Props) {
       recorder.onerror = (e) => {
         console.error('Recorder error', e);
         setExporting(false);
+        setPlaybackRate(prevPlaybackRate);
         setToastMsg('Export failed during recording');
       };
       recorder.onstop = async () => {
+        // Restore previous playback rate after export
+        setPlaybackRate(prevPlaybackRate);
         if (isCancelingRef.current) {
           setExporting(false);
           setExportProgress(0);
@@ -442,6 +464,10 @@ export function Viewer({ clip, footage }: Props) {
       isCancelingRef.current = false;
       recorder.start(1000);
 
+      // Capture export start time and segment info for overlay updates
+      const exportSegmentStartName = footage.segments[seekInfo.index].name;
+      const exportSeekSeconds = seekInfo.seconds;
+
       const start = performance.now();
       const step = () => {
         if (isCancelingRef.current) {
@@ -455,6 +481,12 @@ export function Viewer({ clip, footage }: Props) {
         try {
           const elapsed = (performance.now() - start) / 1000;
           setExportProgress(Math.min(100, (elapsed / exportableSeconds) * 100)); // Update progress
+
+          // Update overlay timestamp to reflect current export time
+          const currentExportTime = dayjs(parseTime(exportSegmentStartName))
+            .add(exportSeekSeconds + elapsed, 'second')
+            .format('YYYY年MM月DD日 ddd HH:mm:ss');
+          overlayRef.current = { time: currentExportTime, location: locationText };
 
           drawFrame(ctx, width, height, isGrid);
           if (elapsed < exportableSeconds) {
@@ -485,7 +517,9 @@ export function Viewer({ clip, footage }: Props) {
     exportSelectionSeconds,
     exportableSeconds,
     exporting,
+    playbackRate,
     drawFrame,
+    locationText,
     resolveCanvasSize,
     viewType,
   ]);
@@ -700,7 +734,7 @@ export function Viewer({ clip, footage }: Props) {
                 onClick={() => setPlaying(!playing)}
                 className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
               >
-                {playing ? <IoPause size={24} /> : <IoPlay size={24} ml-1 />}
+                {playing ? <IoPause size={24} /> : <IoPlay size={24} />}
               </button>
             )}
             <IconBtn onClick={() => jump(15)}>
@@ -710,7 +744,7 @@ export function Viewer({ clip, footage }: Props) {
 
           {/* Right: Event Jump & Speed */}
           <div className="flex items-center gap-4">
-            {eventSeconds && (
+            {eventSeconds !== undefined && (
               <button
                 onClick={() => seek(eventSeconds)}
                 className="text-brand-primary text-xs font-medium tracking-wider uppercase hover:text-red-400"

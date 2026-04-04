@@ -96,9 +96,12 @@ export function Player({
               const { currentTime, duration } = videoRef.current;
               updateState({
                 currentTime,
-                ended: currentTime === duration,
+                ended: duration > 0 && duration - currentTime < 0.1,
               });
             }
+          }}
+          onEnded={() => {
+            updateState({ ended: true });
           }}
           className="max-h-full max-w-full object-contain"
           // crossOrigin="anonymous" // Removed to prevent potential CORS issues with local files
