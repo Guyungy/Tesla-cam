@@ -28,7 +28,7 @@ import { Progress } from './Progress';
 import { Rate } from './Rate';
 import { ExportModal } from './ExportModal';
 import { Toast } from './Toast';
-import { useExportSettings, type ExportSettings } from './useExportSettings';
+import { useExportSettings } from './useExportSettings';
 
 type Props = {
   clip: CamClip;
@@ -77,6 +77,7 @@ const LAYOUT_OPTIONS: { id: ViewType; label: string }[] = [
 
 export function Viewer({ clip, footage, onFootageUpdate }: Props) {
   const { t } = useI18n();
+  const { exportSettings } = useExportSettings();
 
   // ── Video Refs (6 cameras) ──
   const frontRef = useRef<HTMLVideoElement>(null);
@@ -148,10 +149,6 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
 
   const clipPlayedSeconds = segment.startSeconds + segmentPlayedSeconds;
   const eventSeconds = calcEventSeconds(clip, footage);
-  const overlayRef = useRef({ time: formatTime, location: locationText });
-  useEffect(() => {
-    overlayRef.current = { time: formatTime, location: locationText };
-  }, [formatTime, locationText]);
 
   // ── Lazy SEI Metadata Extraction ──
   const seiLoadingRef = useRef(false);
@@ -199,6 +196,24 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     }
     return data[lo] ?? null;
   }, [footage.seiData, clipPlayedSeconds]);
+
+  // ── Overlay ref for drawFrame (avoids stale closure) ──
+  const overlayRef = useRef({
+    time: formatTime,
+    location: locationText,
+    sei: currentSEI,
+    settings: exportSettings,
+    t,
+  });
+  useEffect(() => {
+    overlayRef.current = {
+      time: formatTime,
+      location: locationText,
+      sei: currentSEI,
+      settings: exportSettings,
+      t,
+    };
+  }, [formatTime, locationText, currentSEI, exportSettings, t]);
 
   // ── Controls ──
   const [playing, setPlaying] = useState(true);
@@ -468,30 +483,145 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         }
       }
 
-      // ── Bottom info bar (below the video area, never covers video) ──
+      // ── Camera labels overlay (on each cell) ──
+      const { t: tFn } = overlayRef.current;
+      const scale = width / 1280;
+      const labelFontSize = Math.max(11, Math.round(14 * scale));
+      const labelPad = Math.round(8 * scale);
+      ctx.font = `500 ${labelFontSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+
+      const drawCamLabel = (cam: CamName, x: number, y: number, w: number, h: number) => {
+        const label = tFn(CAM_I18N_KEYS[cam]);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        const tw = ctx.measureText(label).width;
+        const lx = x + w - tw - labelPad * 2;
+        const ly = y + h - labelFontSize - labelPad * 1.5;
+        ctx.fillRect(lx, ly, tw + labelPad * 2, labelFontSize + labelPad * 1.5);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.fillText(label, lx + labelPad, ly + labelFontSize + labelPad * 0.3);
+      };
+
+      // Draw camera labels based on layout
+      switch (layout) {
+        case 'grid6': {
+          const cellW = width / 3, cellH = vH / 2;
+          drawCamLabel('left', 0, 0, cellW, cellH);
+          drawCamLabel('front', cellW, 0, cellW, cellH);
+          drawCamLabel('right', cellW * 2, 0, cellW, cellH);
+          drawCamLabel('left_pillar', 0, cellH, cellW, cellH);
+          drawCamLabel('back', cellW, cellH, cellW, cellH);
+          drawCamLabel('right_pillar', cellW * 2, cellH, cellW, cellH);
+          break;
+        }
+        case 'grid4': {
+          const halfW = width / 2, halfH = vH / 2;
+          drawCamLabel('front', 0, 0, halfW, halfH);
+          drawCamLabel('back', halfW, 0, halfW, halfH);
+          drawCamLabel('left', 0, halfH, halfW, halfH);
+          drawCamLabel('right', halfW, halfH, halfW, halfH);
+          break;
+        }
+        case 'grid4old': {
+          const topH = vH * 0.6, botH = vH - topH;
+          const thirdW = width / 3;
+          drawCamLabel('front', 0, 0, width, topH);
+          drawCamLabel('left', 0, topH, thirdW, botH);
+          drawCamLabel('back', thirdW, topH, thirdW, botH);
+          drawCamLabel('right', thirdW * 2, topH, thirdW, botH);
+          break;
+        }
+        default:
+          drawCamLabel(layout as CamName, 0, 0, width, vH);
+      }
+
+      // ── Driving data overlay (top) ──
+      const { settings, sei } = overlayRef.current;
+      if (settings.showDriveData && sei) {
+        const topBarH = Math.round(50 * scale);
+        const tp = Math.round(12 * scale);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(0, 0, width, topBarH);
+
+        // Speed (large, centered)
+        const speedVal = sei.speedKph != null ? Math.round(sei.speedKph) : '--';
+        const speedColor = sei.speedKph != null
+          ? (sei.speedKph > 120 ? '#ef4444' : sei.speedKph > 80 ? '#eab308' : '#22c55e')
+          : '#a3a3a3';
+        const speedSize = Math.max(24, Math.round(36 * scale));
+        ctx.font = `bold ${speedSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+        ctx.fillStyle = speedColor;
+        const speedText = `${speedVal}`;
+        const speedW = ctx.measureText(speedText).width;
+        ctx.fillText(speedText, (width - speedW) / 2, topBarH / 2 + speedSize * 0.35);
+
+        // Unit
+        const unitSize = Math.max(10, Math.round(12 * scale));
+        ctx.font = `500 ${unitSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+        ctx.fillStyle = '#737373';
+        ctx.fillText('km/h', (width - speedW) / 2 + speedW + tp, topBarH / 2 + unitSize * 0.3);
+
+        // Gear (left side)
+        const gearSize = Math.max(16, Math.round(22 * scale));
+        ctx.font = `bold ${gearSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+        const gearColors: Record<string, string> = { D: '#22c55e', R: '#ef4444', N: '#eab308', P: '#737373' };
+        ctx.fillStyle = gearColors[sei.gear] || '#737373';
+        ctx.fillText(sei.gear, tp * 2, topBarH / 2 + gearSize * 0.3);
+
+        // AP status (right side)
+        if (sei.apStatus && sei.apStatus !== 'UNKNOWN') {
+          const apSize = Math.max(10, Math.round(12 * scale));
+          ctx.font = `600 ${apSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+          const apColors: Record<string, string> = { AP: '#3b82f6', FSD: '#6366f1', STANDBY: '#eab308', OFF: '#737373' };
+          ctx.fillStyle = apColors[sei.apStatus] || '#737373';
+          const apText = sei.apStatus;
+          const apW = ctx.measureText(apText).width;
+          ctx.fillText(apText, width - tp * 2 - apW, topBarH / 2 + apSize * 0.3);
+        }
+      }
+
+      // ── Bottom info bar (polished design) ──
       const barHeight = height - vH;
       if (barHeight > 0) {
-        const { time, location } = overlayRef.current;
+        const { time, location, settings: sett } = overlayRef.current;
         const barY = vH;
 
-        // Bar background is already black from the initial fillRect
-        const scale = width / 1280;
-        const hPad = Math.round(16 * scale);
-        const titleSize = Math.max(14, Math.round(24 * scale));
-        const subtitleSize = Math.max(11, Math.round(16 * scale));
+        // Gradient bar background
+        const grad = ctx.createLinearGradient(0, barY, 0, height);
+        grad.addColorStop(0, '#111111');
+        grad.addColorStop(1, '#0a0a0a');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, barY, width, barHeight);
 
-        // Time text — left side, vertically centred in bar
-        ctx.fillStyle = '#f5f5f5';
-        ctx.font = `bold ${titleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-        const textBaseY = barY + (barHeight + titleSize * 0.7) / 2;
-        ctx.fillText(time, hPad, textBaseY);
+        // Top accent line
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.fillRect(0, barY, width, 1);
 
-        // Location text — right-aligned, same baseline
-        ctx.fillStyle = '#a3a3a3';
-        ctx.font = `${subtitleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-        const locBaseY = barY + (barHeight + subtitleSize * 0.7) / 2;
-        const locWidth = ctx.measureText(location).width;
-        ctx.fillText(location, width - hPad - locWidth, locBaseY);
+        const hPad = Math.round(20 * scale);
+        const titleSize = Math.max(16, Math.round(26 * scale));
+        const subSize = Math.max(12, Math.round(16 * scale));
+
+        // Time text — left side
+        if (sett.showTime) {
+          ctx.fillStyle = '#ffffff';
+          ctx.font = `600 ${titleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+          const textBaseY = barY + (barHeight + titleSize * 0.65) / 2;
+          ctx.fillText(time, hPad, textBaseY);
+        }
+
+        // Location text — right side with subtle icon hint
+        if (sett.showLocation) {
+          ctx.fillStyle = '#a3a3a3';
+          ctx.font = `400 ${subSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+          const locBaseY = barY + (barHeight + subSize * 0.65) / 2;
+          const locWidth = ctx.measureText(location).width;
+          // Small location pin icon hint
+          ctx.fillStyle = '#525252';
+          ctx.beginPath();
+          ctx.arc(width - hPad - locWidth - 20, locBaseY - subSize * 0.3, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#a3a3a3';
+          ctx.fillText(location, width - hPad - locWidth - 12, locBaseY);
+        }
       }
     },
     [refMap, overlayRef],

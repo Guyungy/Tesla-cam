@@ -56,7 +56,7 @@ export function Dashboard({ data, hasMetadata }: Props) {
   const steeringRotation = (steering / 540) * 150;
 
   return (
-    <div className="pointer-events-none absolute right-4 top-1/2 z-50 w-[200px] -translate-y-1/2 select-none">
+    <div className="pointer-events-none absolute right-4 top-4 z-50 w-[200px] select-none">
       <div className={clsx(
         'glass-panel flex flex-col gap-6 rounded-xl p-4 transition-all duration-300',
         !data && 'opacity-60',
