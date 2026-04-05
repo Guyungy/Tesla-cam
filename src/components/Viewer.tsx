@@ -28,6 +28,7 @@ import { Progress } from './Progress';
 import { Rate } from './Rate';
 import { ExportModal } from './ExportModal';
 import { Toast } from './Toast';
+import { useExportSettings, type ExportSettings } from './useExportSettings';
 
 type Props = {
   clip: CamClip;
@@ -41,7 +42,7 @@ const MAX_EXPORT_SECONDS = 60;
 /** All 6 camera names */
 const ALL_CAMS: CamName[] = ['front', 'back', 'left', 'right', 'left_pillar', 'right_pillar'];
 
-/** Display labels for camera names */
+/** Display labels for camera names (UI) */
 const CAM_LABELS: Record<CamName, string> = {
   front: 'Front',
   back: 'Back',
@@ -49,6 +50,16 @@ const CAM_LABELS: Record<CamName, string> = {
   right: 'Right',
   left_pillar: 'L-Pillar',
   right_pillar: 'R-Pillar',
+};
+
+/** i18n keys for camera name overlays on export canvas */
+const CAM_I18N_KEYS: Record<CamName, string> = {
+  front: 'cam.front',
+  back: 'cam.back',
+  left: 'cam.left',
+  right: 'cam.right',
+  left_pillar: 'cam.left_pillar',
+  right_pillar: 'cam.right_pillar',
 };
 
 /** Layout definitions for view switcher */
@@ -376,13 +387,41 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       width: number,
       height: number,
       layout: ViewType,
+      videoHeight?: number,
     ) => {
+      // videoHeight = area for video grid; remaining = bottom info bar
+      const vH = videoHeight ?? height;
+
+      /**
+       * Draw a video into a cell while preserving its native aspect ratio
+       * (like CSS object-contain). The cell background is already black.
+       */
       const drawVideo = (
         video: HTMLVideoElement | null,
-        x: number, y: number, w: number, h: number,
+        cx: number, cy: number, cw: number, ch: number,
       ) => {
         if (!video || video.readyState < 2) return;
-        ctx.drawImage(video, x, y, w, h);
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (!vw || !vh) return;
+
+        const videoAR = vw / vh;
+        const cellAR = cw / ch;
+
+        let dw: number, dh: number;
+        if (videoAR > cellAR) {
+          // Video is wider than cell → fit to width, letterbox top/bottom
+          dw = cw;
+          dh = cw / videoAR;
+        } else {
+          // Video is taller than cell → fit to height, pillarbox left/right
+          dh = ch;
+          dw = ch * videoAR;
+        }
+
+        const dx = cx + (cw - dw) / 2;
+        const dy = cy + (ch - dh) / 2;
+        ctx.drawImage(video, dx, dy, dw, dh);
       };
 
       ctx.fillStyle = 'black';
@@ -391,7 +430,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       switch (layout) {
         case 'grid6': {
           const cellW = width / 3;
-          const cellH = height / 2;
+          const cellH = vH / 2;
           // Row 1: left, front, right
           drawVideo(leftRef.current, 0, 0, cellW, cellH);
           drawVideo(frontRef.current, cellW, 0, cellW, cellH);
@@ -404,7 +443,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         }
         case 'grid4': {
           const halfW = width / 2;
-          const halfH = height / 2;
+          const halfH = vH / 2;
           drawVideo(frontRef.current, 0, 0, halfW, halfH);
           drawVideo(backRef.current, halfW, 0, halfW, halfH);
           drawVideo(leftRef.current, 0, halfH, halfW, halfH);
@@ -413,8 +452,8 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         }
         case 'grid4old': {
           // Legacy: front on top (full width), 3 below
-          const topH = height * 0.6;
-          const botH = height - topH;
+          const topH = vH * 0.6;
+          const botH = vH - topH;
           const thirdW = width / 3;
           drawVideo(frontRef.current, 0, 0, width, topH);
           drawVideo(leftRef.current, 0, topH, thirdW, botH);
@@ -425,36 +464,35 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         default: {
           // Single camera
           const singleRef = refMap[layout as CamName];
-          drawVideo(singleRef?.current ?? null, 0, 0, width, height);
+          drawVideo(singleRef?.current ?? null, 0, 0, width, vH);
         }
       }
 
-      // Overlay — scale font size proportionally to canvas width
-      const { time, location } = overlayRef.current;
-      const scale = width / 1280; // Base scale: 1280px = 1x
-      const padding = Math.round(40 * scale);
-      const titleSize = Math.round(56 * scale);   // Large, bold time
-      const subtitleSize = Math.round(40 * scale); // Location text
-      const innerPad = Math.round(28 * scale);
-      const boxWidth = width - padding * 2;
-      const boxHeight = Math.round((titleSize + subtitleSize + innerPad * 2.5));
+      // ── Bottom info bar (below the video area, never covers video) ──
+      const barHeight = height - vH;
+      if (barHeight > 0) {
+        const { time, location } = overlayRef.current;
+        const barY = vH;
 
-      // Background box with rounded-ish look
-      ctx.fillStyle = 'rgba(0,0,0,0.65)';
-      ctx.beginPath();
-      const r = Math.round(12 * scale);
-      ctx.roundRect(padding, padding, boxWidth, boxHeight, r);
-      ctx.fill();
+        // Bar background is already black from the initial fillRect
+        const scale = width / 1280;
+        const hPad = Math.round(16 * scale);
+        const titleSize = Math.max(14, Math.round(24 * scale));
+        const subtitleSize = Math.max(11, Math.round(16 * scale));
 
-      // Time text
-      ctx.fillStyle = '#f5f5f5';
-      ctx.font = `bold ${titleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-      ctx.fillText(time, padding + innerPad, padding + innerPad + titleSize * 0.82);
+        // Time text — left side, vertically centred in bar
+        ctx.fillStyle = '#f5f5f5';
+        ctx.font = `bold ${titleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+        const textBaseY = barY + (barHeight + titleSize * 0.7) / 2;
+        ctx.fillText(time, hPad, textBaseY);
 
-      // Location text
-      ctx.fillStyle = '#a3a3a3';
-      ctx.font = `${subtitleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-      ctx.fillText(location, padding + innerPad, padding + innerPad + titleSize + subtitleSize * 0.95);
+        // Location text — right-aligned, same baseline
+        ctx.fillStyle = '#a3a3a3';
+        ctx.font = `${subtitleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
+        const locBaseY = barY + (barHeight + subtitleSize * 0.7) / 2;
+        const locWidth = ctx.measureText(location).width;
+        ctx.fillText(location, width - hPad - locWidth, locBaseY);
+      }
     },
     [refMap, overlayRef],
   );
@@ -463,6 +501,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
    * Resolve export canvas size.
    * Multi-grid layouts are capped at 1920×1080 (1080p) to keep file sizes reasonable.
    * Single camera exports use the native video resolution.
+   * Adds a bottom bar for time/location info (60-80px).
    */
   const resolveCanvasSize = useCallback(() => {
     const baseVideo = frontRef.current || backRef.current;
@@ -470,49 +509,56 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     const fallbackHeight = 720;
     const baseWidth = baseVideo?.videoWidth || fallbackWidth;
     const baseHeight = baseVideo?.videoHeight || fallbackHeight;
+    
+    // Bottom bar height for time/location overlay
+    const bottomBarHeight = 60;
 
     switch (viewType) {
       case 'grid6': {
-        // 3×2 grid → 1920×1080 (standard 1080p)
+        // 3×2 grid → 1920×1080 + bottom bar
         const w = 1920;
-        const h = 1080;
-        return { width: w, height: h };
+        const h = 1080 + bottomBarHeight;
+        return { width: w, height: h, videoHeight: 1080 };
       }
       case 'grid4': {
-        // 2×2 grid → 1920×1080
+        // 2×2 grid → 1920×1080 + bottom bar
         const w = 1920;
-        const h = 1080;
-        return { width: w, height: h };
+        const h = 1080 + bottomBarHeight;
+        return { width: w, height: h, videoHeight: 1080 };
       }
       case 'grid4old': {
-        // Classic layout (front top + 3 bottom) → 1920×1080
+        // Classic layout (front top + 3 bottom) → 1920×1080 + bottom bar
         const w = 1920;
-        const h = 1080;
-        return { width: w, height: h };
+        const h = 1080 + bottomBarHeight;
+        return { width: w, height: h, videoHeight: 1080 };
       }
-      default:
+      default: {
         // Single camera: use native resolution, capped at 1920 wide
-        if (baseWidth > 1920) {
-          const scale = 1920 / baseWidth;
-          const w = 1920;
-          const h = Math.round(baseHeight * scale);
-          // H.264 requires even dimensions
-          return { width: w, height: h % 2 === 0 ? h : h + 1 };
+        let w = baseWidth;
+        let h = baseHeight;
+        if (w > 1920) {
+          const scale = 1920 / w;
+          w = 1920;
+          h = Math.round(baseHeight * scale);
         }
-        return { width: baseWidth, height: baseHeight };
+        // H.264 requires even dimensions
+        w = w % 2 === 0 ? w : w + 1;
+        h = h % 2 === 0 ? h : h + 1;
+        return { width: w, height: h + bottomBarHeight, videoHeight: h };
+      }
     }
   }, [viewType]);
 
   // ── Screenshots ──
   const exportScreenshot = useCallback(async () => {
     try {
-      const { width, height } = resolveCanvasSize();
+      const { width, height, videoHeight } = resolveCanvasSize();
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Failed to get canvas context');
-      drawFrame(ctx, width, height, viewType);
+      drawFrame(ctx, width, height, viewType, videoHeight);
 
       canvas.toBlob(
         async (blob) => {
@@ -659,7 +705,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
       // 5. Canvas setup
-      const { width, height } = resolveCanvasSize();
+      const { width, height, videoHeight } = resolveCanvasSize();
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
@@ -738,7 +784,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
           overlayRef.current = { time: currentExportTime, location: locationText };
 
           // Draw and capture frame
-          drawFrame(ctx, width, height, viewType);
+          drawFrame(ctx, width, height, viewType, videoHeight);
           const jpegBytes = await canvasToJpegBytes(canvas);
           await window.electronAPI!.exportFrame(sessionId, jpegBytes);
 

@@ -2,6 +2,7 @@ import { VscClose } from 'react-icons/vsc';
 import { useI18n } from '../i18n';
 import type { Locale } from '../i18n';
 import clsx from 'clsx';
+import { useExportSettings } from './useExportSettings';
 
 type Props = {
   open: boolean;
@@ -15,8 +16,15 @@ const LANGUAGE_OPTIONS: { id: Locale; label: string; flag: string }[] = [
 
 export function Settings({ open, onClose }: Props) {
   const { locale, setLocale, t } = useI18n();
+  const { exportSettings, setExportSettings } = useExportSettings();
 
   if (!open) return null;
+
+  const toggles: { key: keyof typeof exportSettings; label: string }[] = [
+    { key: 'showTime', label: t('settings.exportTime') },
+    { key: 'showLocation', label: t('settings.exportLocation') },
+    { key: 'showDriveData', label: t('settings.exportDriveData') },
+  ];
 
   return (
     <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -31,7 +39,8 @@ export function Settings({ open, onClose }: Props) {
           </button>
         </div>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-5">
+          {/* Language */}
           <div>
             <label className="mb-2 block text-sm font-medium text-neutral-400">
               {t('settings.language')}
@@ -51,6 +60,42 @@ export function Settings({ open, onClose }: Props) {
                   <span>{opt.flag}</span>
                   <span>{opt.label}</span>
                 </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-white/5" />
+
+          {/* Export Options */}
+          <div>
+            <label className="mb-3 block text-sm font-medium text-neutral-400">
+              {t('settings.export')}
+            </label>
+            <div className="flex flex-col gap-2.5">
+              {toggles.map(({ key, label }) => (
+                <label
+                  key={key}
+                  className="flex cursor-pointer items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2.5 transition-colors hover:border-white/10"
+                >
+                  <span className="text-sm text-neutral-300">{label}</span>
+                  <button
+                    role="switch"
+                    aria-checked={exportSettings[key]}
+                    onClick={() => setExportSettings({ [key]: !exportSettings[key] })}
+                    className={clsx(
+                      'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200',
+                      exportSettings[key] ? 'bg-brand-primary' : 'bg-white/15',
+                    )}
+                  >
+                    <span
+                      className={clsx(
+                        'inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform duration-200',
+                        exportSettings[key] ? 'translate-x-[18px]' : 'translate-x-[3px]',
+                      )}
+                    />
+                  </button>
+                </label>
               ))}
             </div>
           </div>

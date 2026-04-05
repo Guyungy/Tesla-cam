@@ -86,6 +86,18 @@ export const locales = {
     'settings.title': '设置',
     'settings.language': '语言',
     'settings.close': '关闭',
+    'settings.export': '导出选项',
+    'settings.exportTime': '显示时间',
+    'settings.exportLocation': '显示位置',
+    'settings.exportDriveData': '显示驾驶数据',
+
+    // Camera labels (export overlay)
+    'cam.front': '前方',
+    'cam.back': '后方',
+    'cam.left': '左侧',
+    'cam.right': '右侧',
+    'cam.left_pillar': '左B柱',
+    'cam.right_pillar': '右B柱',
 
     // Clip types
     'clipType.manual': '手动保存',
@@ -181,6 +193,18 @@ export const locales = {
     'settings.title': 'Settings',
     'settings.language': 'Language',
     'settings.close': 'Close',
+    'settings.export': 'Export Options',
+    'settings.exportTime': 'Show Time',
+    'settings.exportLocation': 'Show Location',
+    'settings.exportDriveData': 'Show Driving Data',
+
+    // Camera labels (export overlay)
+    'cam.front': 'Front',
+    'cam.back': 'Rear',
+    'cam.left': 'Left',
+    'cam.right': 'Right',
+    'cam.left_pillar': 'L-Pillar',
+    'cam.right_pillar': 'R-Pillar',
 
     // Clip types
     'clipType.manual': 'Manual',
