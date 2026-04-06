@@ -1,8 +1,7 @@
 import dayjs from 'dayjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IoPause, IoPlay, IoVolumeHigh, IoVolumeMute } from 'react-icons/io5';
+import { IoPause, IoPlay, IoTrashOutline, IoVolumeHigh, IoVolumeMute } from 'react-icons/io5';
 import { MdReplay, MdPictureInPicture } from 'react-icons/md';
-import { RiForward15Fill, RiReplay15Fill } from 'react-icons/ri';
 import clsx from 'clsx';
 
 import {
@@ -20,7 +19,7 @@ import {
   type SEIDataPoint,
   type ViewType,
 } from '../utils';
-import { useI18n } from '../i18n';
+import { useI18n, type TranslationKey } from '../i18n';
 import { Dashboard } from './Dashboard';
 import { IconBtn } from './IconBtn';
 import { Player } from './Player';
@@ -35,9 +34,13 @@ type Props = {
   footage: CamFootage;
   /** Callback to update footage with SEI data once loaded */
   onFootageUpdate?: (footage: CamFootage) => void;
+  onDelete?: (clip: CamClip) => Promise<{ ok: boolean; canceled?: boolean; error?: string } | undefined>;
 };
 
 const MAX_EXPORT_SECONDS = 60;
+const SINGLE_EXPORT_MAX_WIDTH = 3840;
+const TESLA_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M40 2L10 2C9.445 2 9 2.449 9 3L9 47C9 47.551 9.445 48 10 48L40 48C40.555 48 41 47.551 41 47L41 3C41 2.449 40.555 2 40 2ZM23.137 10.094C24.375 10.063 25.625 10.063 26.867 10.094C30.074 10.176 33.285 10.515 36.309 11.539L35.633 12.531C33.074 11.633 30.035 11.199 26.828 11.105C25.617 11.066 24.383 11.066 23.172 11.105C19.965 11.199 16.93 11.633 14.367 12.531L13.695 11.539C16.719 10.515 19.926 10.176 23.137 10.094ZM17.086 37.078C17.02 37.359 16.793 37.594 16.484 37.715L15.547 37.715L15.492 37.738L15.492 40.27L14.906 40.27L14.906 37.738L14.859 37.715L13.922 37.715C13.613 37.594 13.387 37.359 13.32 37.078L13.32 37.074L17.086 37.074ZM21.34 40.266L19.113 40.266C18.801 40.141 18.57 39.906 18.508 39.625L21.941 39.625C21.879 39.906 21.652 40.141 21.34 40.266ZM21.34 38.965L19.113 38.965C18.801 38.844 18.57 38.605 18.508 38.328L21.941 38.328C21.879 38.605 21.652 38.844 21.34 38.965ZM21.34 37.727L19.113 37.727C18.801 37.602 18.57 37.367 18.508 37.086L21.941 37.086C21.879 37.367 21.652 37.602 21.34 37.727ZM26.867 40.27L23.617 40.27L23.629 40.246C23.691 39.965 23.918 39.75 24.223 39.625L26.289 39.625L26.289 38.965L23.617 38.965L23.617 37.078L26.852 37.078C26.785 37.359 26.559 37.609 26.25 37.703L24.191 37.703L24.191 38.336L26.867 38.336ZM31.16 40.246L28.523 40.238L28.523 37.078L29.102 37.074L29.098 39.617L31.668 39.617C31.605 39.883 31.449 40.113 31.16 40.246ZM28.453 13.633L25 32.164L21.547 13.633C19.699 13.633 17.781 13.918 17.73 15.277C16.863 15.059 15.281 14.074 14.918 13.383C17.555 12.316 21.902 12.176 23.789 12.246L25 13.8L26.211 12.246C28.098 12.176 32.449 12.316 35.086 13.383C34.719 14.074 33.137 15.059 32.266 15.277C32.219 13.918 30.297 13.633 28.453 13.633ZM36.602 40.258L36.027 40.258L36.027 38.969L33.934 38.969L33.934 40.258L33.355 40.258L33.355 38.32L36.602 38.324ZM36.086 37.711L33.859 37.711C33.547 37.586 33.305 37.363 33.246 37.082L36.68 37.082C36.617 37.363 36.398 37.586 36.086 37.711Z" fill="white"/></svg>`;
+const TESLA_ICON_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(TESLA_ICON_SVG)}`;
 
 /** All 6 camera names */
 const ALL_CAMS: CamName[] = ['front', 'back', 'left', 'right', 'left_pillar', 'right_pillar'];
@@ -53,7 +56,7 @@ const CAM_LABELS: Record<CamName, string> = {
 };
 
 /** i18n keys for camera name overlays on export canvas */
-const CAM_I18N_KEYS: Record<CamName, string> = {
+const CAM_I18N_KEYS: Record<CamName, TranslationKey> = {
   front: 'cam.front',
   back: 'cam.back',
   left: 'cam.left',
@@ -75,7 +78,7 @@ const LAYOUT_OPTIONS: { id: ViewType; label: string }[] = [
   { id: 'right_pillar', label: 'R-Pillar' },
 ];
 
-export function Viewer({ clip, footage, onFootageUpdate }: Props) {
+export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
   const { t } = useI18n();
   const { exportSettings } = useExportSettings();
 
@@ -109,11 +112,16 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
 
   // ── Segment Control ──
   const [segmentIndex, setSegmentIndex] = useState(0);
+  const segmentIndexRef = useRef(0);
   const segment = footage.segments[segmentIndex];
   const isLastSegment = segmentIndex === footage.segments.length - 1;
   const isSegmentsEnded = states.every(
     (i) => i.index === segmentIndex && i.ended,
   );
+
+  useEffect(() => {
+    segmentIndexRef.current = segmentIndex;
+  }, [segmentIndex]);
 
   useEffect(() => {
     if (isSegmentsEnded && !isLastSegment) {
@@ -205,6 +213,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     settings: exportSettings,
     t,
   });
+  const teslaIconRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
     overlayRef.current = {
       time: formatTime,
@@ -214,6 +223,11 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       t,
     };
   }, [formatTime, locationText, currentSEI, exportSettings, t]);
+  useEffect(() => {
+    const image = new Image();
+    image.src = TESLA_ICON_DATA_URL;
+    teslaIconRef.current = image;
+  }, []);
 
   // ── Controls ──
   const [playing, setPlaying] = useState(true);
@@ -309,6 +323,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
   const [exportOut, setExportOut] = useState<number>();
   const isCancelingRef = useRef(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const exportSelectionSeconds = useMemo(() => {
     if (exportIn === undefined || exportOut === undefined) return 0;
@@ -596,32 +611,59 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.fillRect(0, barY, width, 1);
 
-        const hPad = Math.round(20 * scale);
-        const titleSize = Math.max(16, Math.round(26 * scale));
-        const subSize = Math.max(12, Math.round(16 * scale));
+        const hPad = Math.round(22 * scale);
+        const brandSize = Math.max(9, Math.round(11 * scale));
+        const titleSize = Math.max(16, Math.round(28 * scale));
+        const subSize = Math.max(12, Math.round(15 * scale));
+        const iconSize = Math.max(22, Math.round(30 * scale));
+        const leftTextX = hPad + iconSize + Math.round(16 * scale);
+        const brandY = barY + Math.max(15, Math.round(18 * scale));
+        const titleY = barY + barHeight - Math.max(11, Math.round(14 * scale));
 
-        // Time text — left side
+        const iconImage = teslaIconRef.current;
+        if (iconImage?.complete) {
+          const iconX = hPad;
+          const iconY = barY + (barHeight - iconSize) / 2;
+          ctx.fillStyle = 'rgba(225, 29, 72, 0.12)';
+          ctx.fillRect(
+            iconX - Math.round(8 * scale),
+            iconY - Math.round(6 * scale),
+            iconSize + Math.round(16 * scale),
+            iconSize + Math.round(12 * scale),
+          );
+          ctx.drawImage(iconImage, iconX, iconY, iconSize, iconSize);
+        }
+
+        ctx.textBaseline = 'top';
+
         if (sett.showTime) {
-          ctx.fillStyle = '#ffffff';
-          ctx.font = `600 ${titleSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-          const textBaseY = barY + (barHeight + titleSize * 0.65) / 2;
-          ctx.fillText(time, hPad, textBaseY);
+          ctx.fillStyle = '#fb7185';
+          ctx.font = `700 ${brandSize}px "Aptos", "Segoe UI Variable Display", "Segoe UI", sans-serif`;
+          ctx.fillText('TESLA CINEMA', leftTextX, brandY);
+
+          ctx.fillStyle = '#fafafa';
+          ctx.font = `700 ${titleSize}px "Aptos Display", "Segoe UI Variable Display", "Segoe UI", sans-serif`;
+          ctx.fillText(time, leftTextX, titleY - titleSize);
         }
 
-        // Location text — right side with subtle icon hint
         if (sett.showLocation) {
-          ctx.fillStyle = '#a3a3a3';
-          ctx.font = `400 ${subSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-          const locBaseY = barY + (barHeight + subSize * 0.65) / 2;
+          ctx.font = `500 ${subSize}px "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif`;
           const locWidth = ctx.measureText(location).width;
-          // Small location pin icon hint
-          ctx.fillStyle = '#525252';
-          ctx.beginPath();
-          ctx.arc(width - hPad - locWidth - 20, locBaseY - subSize * 0.3, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = '#a3a3a3';
-          ctx.fillText(location, width - hPad - locWidth - 12, locBaseY);
+          const accentW = Math.max(3, Math.round(4 * scale));
+          const accentH = Math.max(18, Math.round(22 * scale));
+          const locX = width - hPad - locWidth;
+          const locY = barY + (barHeight - subSize) / 2 + Math.round(1 * scale);
+          const accentX = locX - Math.round(16 * scale);
+          const accentY = barY + (barHeight - accentH) / 2;
+
+          ctx.fillStyle = '#ef4444';
+          ctx.fillRect(accentX, accentY, accentW, accentH);
+
+          ctx.fillStyle = '#d4d4d8';
+          ctx.fillText(location, locX, locY);
         }
+
+        ctx.textBaseline = 'alphabetic';
       }
     },
     [refMap, overlayRef],
@@ -629,46 +671,49 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
 
   /**
    * Resolve export canvas size.
-   * Multi-grid layouts are capped at 1920×1080 (1080p) to keep file sizes reasonable.
-   * Single camera exports use the native video resolution.
+   * Multi-grid layouts export at 3840×2160 (4K).
+   * Single camera exports use the native video resolution, capped at 3840 wide.
    * Adds a bottom bar for time/location info (60-80px).
    */
   const resolveCanvasSize = useCallback(() => {
-    const baseVideo = frontRef.current || backRef.current;
+    const visibleVideoRefs = visibleCams
+      .map((cam) => refMap[cam]?.current)
+      .filter((video): video is HTMLVideoElement => !!video?.videoWidth && !!video?.videoHeight);
+    const baseVideo = visibleVideoRefs[0] || frontRef.current || backRef.current;
     const fallbackWidth = 1280;
     const fallbackHeight = 720;
     const baseWidth = baseVideo?.videoWidth || fallbackWidth;
     const baseHeight = baseVideo?.videoHeight || fallbackHeight;
-    
+
     // Bottom bar height for time/location overlay
     const bottomBarHeight = 60;
 
     switch (viewType) {
       case 'grid6': {
-        // 3×2 grid → 1920×1080 + bottom bar
-        const w = 1920;
-        const h = 1080 + bottomBarHeight;
-        return { width: w, height: h, videoHeight: 1080 };
+        // 3×2 grid follows source video size
+        const w = baseWidth * 3;
+        const h = baseHeight * 2 + bottomBarHeight;
+        return { width: w, height: h, videoHeight: baseHeight * 2 };
       }
       case 'grid4': {
-        // 2×2 grid → 1920×1080 + bottom bar
-        const w = 1920;
-        const h = 1080 + bottomBarHeight;
-        return { width: w, height: h, videoHeight: 1080 };
+        // 2×2 grid follows source video size
+        const w = baseWidth * 2;
+        const h = baseHeight * 2 + bottomBarHeight;
+        return { width: w, height: h, videoHeight: baseHeight * 2 };
       }
       case 'grid4old': {
-        // Classic layout (front top + 3 bottom) → 1920×1080 + bottom bar
-        const w = 1920;
-        const h = 1080 + bottomBarHeight;
-        return { width: w, height: h, videoHeight: 1080 };
+        // Classic layout follows source video size
+        const w = baseWidth * 3;
+        const h = baseHeight * 2 + bottomBarHeight;
+        return { width: w, height: h, videoHeight: baseHeight * 2 };
       }
       default: {
-        // Single camera: use native resolution, capped at 1920 wide
+        // Single camera: use native resolution, capped at 3840 wide
         let w = baseWidth;
         let h = baseHeight;
-        if (w > 1920) {
-          const scale = 1920 / w;
-          w = 1920;
+        if (w > SINGLE_EXPORT_MAX_WIDTH) {
+          const scale = SINGLE_EXPORT_MAX_WIDTH / w;
+          w = SINGLE_EXPORT_MAX_WIDTH;
           h = Math.round(baseHeight * scale);
         }
         // H.264 requires even dimensions
@@ -718,6 +763,26 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
   const cancelExport = useCallback(() => {
     isCancelingRef.current = true;
   }, []);
+
+  const deleteClip = useCallback(async () => {
+    if (!onDelete || deleting || exporting) return;
+    setDeleting(true);
+    try {
+      const result = await onDelete(clip);
+      if (!result?.ok && !result?.canceled) {
+        setToastMsg(t('toast.deleteFailed', { error: result?.error || 'unknown' }));
+        return;
+      }
+      if (result?.ok) {
+        setToastMsg(t('toast.clipDeleted'));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown';
+      setToastMsg(t('toast.deleteFailed', { error: message }));
+    } finally {
+      setDeleting(false);
+    }
+  }, [clip, deleting, exporting, onDelete, t]);
 
   // ── CSV Export ──
   const exportCSV = useCallback(async () => {
@@ -771,19 +836,49 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
     });
   };
 
-  /** Convert canvas to JPEG Uint8Array for IPC transfer */
-  const canvasToJpegBytes = (canvas: HTMLCanvasElement): Promise<Uint8Array> => {
-    return new Promise((resolve, reject) => {
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) { reject(new Error('toBlob failed')); return; }
-          blob.arrayBuffer().then((ab) => resolve(new Uint8Array(ab))).catch(reject);
-        },
-        'image/jpeg',
-        0.92,
-      );
-    });
+  /** Read raw RGBA bytes from canvas for fast FFmpeg piping */
+  const canvasToRgbaBytes = (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+  ): Uint8Array => {
+    const imageData = ctx.getImageData(0, 0, width, height);
+    return new Uint8Array(imageData.data.buffer.slice(0));
   };
+
+  const waitForLayoutCommit = useCallback(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+    [],
+  );
+
+  const seekExportFrame = useCallback(
+    async (clipSeconds: number) => {
+      const seekInfo = calcSeekInfo(footage, clipSeconds);
+      if (!seekInfo) throw new Error('Could not resolve export frame position');
+
+      if (segmentIndexRef.current !== seekInfo.index) {
+        setSegmentIndex(seekInfo.index);
+        await waitForLayoutCommit();
+      }
+
+      const activeVideos: HTMLVideoElement[] = [];
+      for (const player of players) {
+        if (player.current && player.current.src) {
+          player.current.pause();
+          player.current.playbackRate = 1;
+          player.current.currentTime = seekInfo.seconds;
+          activeVideos.push(player.current);
+        }
+      }
+
+      await Promise.all(activeVideos.map((video) => waitForVideoReady(video)));
+      return seekInfo;
+    },
+    [footage, players, waitForLayoutCommit],
+  );
 
   // ── Video Export (FFmpeg H.264) ──
   const exportCurrentView = useCallback(async () => {
@@ -805,36 +900,14 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
         exportSelectionSeconds > 0 && exportIn !== undefined
           ? exportIn
           : clipPlayedSeconds;
-      const seekInfo = calcSeekInfo(footage, exportStartSeconds);
-      if (!seekInfo) throw new Error('Could not seek to export start time');
 
       // 1. Pause and set rate to 1x
       setPlaying(false);
       setPlaybackRate(1);
+      await waitForLayoutCommit();
+      const initialSeekInfo = await seekExportFrame(exportStartSeconds);
 
-      // 2. Set segment, wait for React
-      setSegmentIndex(seekInfo.index);
-      await new Promise((r) => setTimeout(r, 150));
-
-      // 3. Seek all videos and wait for frame data
-      const activeVideos: HTMLVideoElement[] = [];
-      for (const p of players) {
-        if (p.current && p.current.src) {
-          p.current.playbackRate = 1;
-          p.current.currentTime = seekInfo.seconds;
-          activeVideos.push(p.current);
-        }
-      }
-      await Promise.all(activeVideos.map((v) => waitForVideoReady(v)));
-
-      // 4. Start playback
-      for (const v of activeVideos) {
-        try { await v.play(); } catch (_) { /* ignore */ }
-      }
-      setPlaying(true);
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-      // 5. Canvas setup
+      // 2. Canvas setup
       const { width, height, videoHeight } = resolveCanvasSize();
       const canvas = document.createElement('canvas');
       canvas.width = width;
@@ -842,17 +915,20 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Failed to create canvas context');
 
+      // Update overlay time for export
+      const exportTime = dayjs(parseTime(footage.segments[initialSeekInfo.index].name))
+        .add(initialSeekInfo.seconds, 'second')
+        .format(timestampFmt);
       overlayRef.current = {
-        time: dayjs(parseTime(footage.segments[seekInfo.index].name))
-          .add(seekInfo.seconds, 'second')
-          .format(timestampFmt),
+        ...overlayRef.current,
+        time: exportTime,
         location: locationText,
       };
 
       const fps = 30;
       const fileName = `${clip.name}-${viewType}.mp4`;
 
-      // 6. Start FFmpeg session (shows save dialog)
+      // 3. Start FFmpeg session (shows save dialog)
       const startResult = await window.electronAPI.exportStart({
         sessionId, fileName, width, height, fps,
       });
@@ -871,14 +947,13 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       setExportEncoding(false);
       isCancelingRef.current = false;
 
-      // 7. Capture frames at target FPS using requestAnimationFrame
-      const exportSegmentStartName = footage.segments[seekInfo.index].name;
-      const exportSeekSeconds = seekInfo.seconds;
-      const frameDurationMs = 1000 / fps;
+      // 4. Capture frames at target FPS using deterministic seeks
+      const frameDuration = 1 / fps; // Duration of each frame in seconds
       const totalFrames = Math.ceil(exportableSeconds * fps);
 
-      const start = performance.now();
+      const startRealTime = performance.now();
       let frameIndex = 0;
+      let lastUiUpdate = 0;
 
       const captureLoop = async () => {
         while (frameIndex < totalFrames) {
@@ -891,47 +966,51 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
             return;
           }
 
-          const elapsed = (performance.now() - start) / 1000;
-          const pct = Math.min(99, (frameIndex / totalFrames) * 100);
-          setExportProgress(pct);
-          setExportFrameCount(frameIndex);
+          const realElapsed = (performance.now() - startRealTime) / 1000;
+          const now = performance.now();
+          if (frameIndex === 0 || frameIndex === totalFrames - 1 || now - lastUiUpdate >= 120) {
+            const pct = Math.min(99, (frameIndex / totalFrames) * 100);
+            setExportProgress(pct);
+            setExportFrameCount(frameIndex);
 
-          // Compute ETA
-          if (frameIndex > 5 && elapsed > 0) {
-            const framesPerSec = frameIndex / elapsed;
-            const remaining = (totalFrames - frameIndex) / framesPerSec;
-            if (remaining > 60) {
-              setExportEta(`${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`);
-            } else {
-              setExportEta(`${Math.round(remaining)}s`);
+            // Compute ETA based on real time
+            if (frameIndex > 5 && realElapsed > 0) {
+              const framesPerSec = frameIndex / realElapsed;
+              const remaining = (totalFrames - frameIndex) / framesPerSec;
+              if (remaining > 60) {
+                setExportEta(`${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`);
+              } else {
+                setExportEta(`${Math.round(remaining)}s`);
+              }
             }
+            lastUiUpdate = now;
           }
 
-          // Update overlay time
-          const currentExportTime = dayjs(parseTime(exportSegmentStartName))
-            .add(exportSeekSeconds + elapsed, 'second')
+          const virtualElapsed = frameIndex * frameDuration;
+          const targetClipSeconds = Math.min(
+            exportStartSeconds + virtualElapsed,
+            footage.duration,
+          );
+          const frameSeekInfo = await seekExportFrame(targetClipSeconds);
+          const overlayTime = dayjs(parseTime(footage.segments[frameSeekInfo.index].name))
+            .add(frameSeekInfo.seconds, 'second')
             .format(timestampFmt);
-          overlayRef.current = { time: currentExportTime, location: locationText };
+          overlayRef.current = { ...overlayRef.current, time: overlayTime, location: locationText };
 
           // Draw and capture frame
           drawFrame(ctx, width, height, viewType, videoHeight);
-          const jpegBytes = await canvasToJpegBytes(canvas);
-          await window.electronAPI!.exportFrame(sessionId, jpegBytes);
+          const frameBytes = canvasToRgbaBytes(ctx, width, height);
+          await window.electronAPI!.exportFrame(sessionId, frameBytes);
 
           frameIndex++;
 
-          // Wait for next frame timing
-          const nextFrameTime = start + frameIndex * frameDurationMs;
-          const waitMs = nextFrameTime - performance.now();
-          if (waitMs > 0) {
-            await new Promise((r) => setTimeout(r, waitMs));
-          } else {
-            // Yield to browser to keep UI responsive
+          // Yield occasionally to keep UI responsive without paying per-frame RAF cost.
+          if (frameIndex % 6 === 0) {
             await new Promise((r) => requestAnimationFrame(r));
           }
         }
 
-        // 8. Finish encoding
+        // 5. Finish encoding
         setExportProgress(100);
         setExportEta(undefined);
         setExportEncoding(true);
@@ -968,7 +1047,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
   }, [
     clip.name, footage, clipPlayedSeconds, exportIn, exportSelectionSeconds,
     exportableSeconds, exporting, playbackRate, drawFrame, locationText,
-    resolveCanvasSize, viewType, players, t, timestampFmt,
+    resolveCanvasSize, viewType, t, timestampFmt, seekExportFrame, waitForLayoutCommit,
   ]);
 
   // ── Map Links ──
@@ -1043,6 +1122,16 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
           title="Picture in Picture (P)"
         >
           <MdPictureInPicture size={16} />
+        </button>
+        <button
+          onClick={deleteClip}
+          disabled={deleting || exporting}
+          className="glass-panel rounded-md px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <IoTrashOutline size={14} />
+            {deleting ? t('viewer.deleting') : t('viewer.deleteClip')}
+          </span>
         </button>
         <button
           onClick={exportScreenshot}
@@ -1147,7 +1236,7 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
       </div>
 
       {/* Control Bar */}
-      <div className="glass-panel mx-auto flex w-full max-w-4xl flex-col gap-3 rounded-2xl p-4">
+      <div className="glass-panel mx-auto flex w-full max-w-6xl flex-col gap-3 rounded-2xl p-4">
         {/* Timeline */}
         <div className="flex items-center gap-3 text-xs font-medium text-neutral-500">
           <span>{formatDuration(clipPlayedSeconds)}</span>
@@ -1215,8 +1304,8 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
 
           {/* Center: Playback */}
           <div className="flex items-center gap-6">
-            <IconBtn onClick={() => jump(-15)}>
-              <RiReplay15Fill size={20} />
+            <IconBtn onClick={() => jump(-5)}>
+              <span className="text-sm font-semibold tabular-nums">-5s</span>
             </IconBtn>
             {isClipEnded ? (
               <button
@@ -1234,8 +1323,8 @@ export function Viewer({ clip, footage, onFootageUpdate }: Props) {
                 {playing ? <IoPause size={24} /> : <IoPlay size={24} />}
               </button>
             )}
-            <IconBtn onClick={() => jump(15)}>
-              <RiForward15Fill size={20} />
+            <IconBtn onClick={() => jump(5)}>
+              <span className="text-sm font-semibold tabular-nums">+5s</span>
             </IconBtn>
           </div>
 

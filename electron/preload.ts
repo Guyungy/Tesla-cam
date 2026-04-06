@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('save-file', { name, buffer }),
   showItemInFolder: (path: string) =>
     ipcRenderer.invoke('show-item-in-folder', path),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  trashFiles: (paths: string[], clipName: string) =>
+    ipcRenderer.invoke('trash-files', { paths, clipName }),
 
   // FFmpeg video export
   exportStart: (opts: {

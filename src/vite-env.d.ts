@@ -7,6 +7,11 @@ interface Window {
     close: () => void;
     saveFile: (name: string, buffer: ArrayBuffer) => Promise<string | null>;
     showItemInFolder: (path: string) => void;
+    getPathForFile: (file: File) => string;
+    trashFiles: (
+      paths: string[],
+      clipName: string,
+    ) => Promise<{ ok: boolean; canceled?: boolean; error?: string; trashedCount?: number }>;
 
     // FFmpeg video export
     exportStart: (opts: {

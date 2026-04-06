@@ -7,6 +7,7 @@ import {
 import { useState } from 'react';
 import { useI18n } from '../i18n';
 import { Settings } from './Settings';
+import { TslMark } from './TslMark';
 
 export function TitleBar() {
   const { t } = useI18n();
@@ -31,8 +32,12 @@ export function TitleBar() {
   return (
     <div className="z-50 flex h-8 shrink-0 items-center justify-between bg-black select-none">
       {/* Drag Region */}
-      <div className="flex flex-1 items-center px-3 text-xs font-medium text-neutral-500 [-webkit-app-region:drag]">
-        {t('titleBar.title')}
+      <div className="flex flex-1 items-center gap-2 px-3 text-xs font-medium text-neutral-500 [-webkit-app-region:drag]">
+        <TslMark size="sm" />
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold tracking-[0.28em] text-white/85">TSL</span>
+          <span className="text-neutral-500/80">{t('titleBar.title')}</span>
+        </div>
       </div>
 
       {/* Window Controls (No Drag) */}

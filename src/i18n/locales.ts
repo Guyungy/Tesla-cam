@@ -23,6 +23,8 @@ export const locales = {
     'viewer.snapshot': '截图',
     'viewer.exportCsv': '导出 CSV',
     'viewer.exportClip': '导出片段',
+    'viewer.deleteClip': '删除片段',
+    'viewer.deleting': '删除中...',
     'viewer.exporting': '导出中...',
     'viewer.jumpToEvent': '跳转到事件',
     'viewer.clearInOut': '清除',
@@ -65,6 +67,8 @@ export const locales = {
     'toast.noContent': '没有可导出的视频内容',
     'toast.noMetadata': '没有可用的元数据用于 CSV 导出',
     'toast.csvFailed': 'CSV 导出失败: {error}',
+    'toast.clipDeleted': '片段已移到回收站',
+    'toast.deleteFailed': '删除失败: {error}',
 
     // Home
     'home.loading': '加载中',
@@ -130,6 +134,8 @@ export const locales = {
     'viewer.snapshot': 'Snapshot',
     'viewer.exportCsv': 'Export CSV',
     'viewer.exportClip': 'Export Clip',
+    'viewer.deleteClip': 'Delete Clip',
+    'viewer.deleting': 'Deleting...',
     'viewer.exporting': 'Exporting...',
     'viewer.jumpToEvent': 'Jump to Event',
     'viewer.clearInOut': 'Clear',
@@ -172,6 +178,8 @@ export const locales = {
     'toast.noContent': 'No video content to export',
     'toast.noMetadata': 'No metadata available for CSV export',
     'toast.csvFailed': 'CSV export failed: {error}',
+    'toast.clipDeleted': 'Clip moved to Recycle Bin',
+    'toast.deleteFailed': 'Delete failed: {error}',
 
     // Home
     'home.loading': 'Loading Footage',

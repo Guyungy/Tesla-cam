@@ -7,6 +7,18 @@ import type { CamClip } from './types';
 
 const recentDirName = 'RecentClips';
 
+function resolveSourcePath(file: File): string | undefined {
+  const legacyPath = (file as File & { path?: string }).path;
+  if (legacyPath) return legacyPath;
+
+  try {
+    const resolved = window.electronAPI?.getPathForFile(file);
+    return resolved || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
   const map: Record<string, CamClip> = {};
 
@@ -24,7 +36,12 @@ export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
           name: recentDirName,
           type: 'recent',
           videos: [],
+          sourcePaths: [],
         };
+      }
+      const filePath = resolveSourcePath(file);
+      if (filePath) {
+        map[recentDirName].sourcePaths?.push(filePath);
       }
       // 识别文件
       if (file.name === 'thumb.png') {
@@ -39,7 +56,12 @@ export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
           name: parentDir,
           type: parseClipType(paths.at(-3)),
           videos: [],
+          sourcePaths: [],
         };
+      }
+      const filePath = resolveSourcePath(file);
+      if (filePath) {
+        map[parentDir].sourcePaths?.push(filePath);
       }
       // 识别文件
       if (file.name === 'thumb.png') {
@@ -64,7 +86,12 @@ export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
   }
 
   // 过滤无视频的项目
-  const clips = Object.values(map).filter((i) => i.videos.length > 0);
+  const clips = Object.values(map)
+    .filter((i) => i.videos.length > 0)
+    .map((clip) => ({
+      ...clip,
+      sourcePaths: Array.from(new Set(clip.sourcePaths || [])),
+    }));
   // 按时间排序
   clips.sort(
     (a, b) =>

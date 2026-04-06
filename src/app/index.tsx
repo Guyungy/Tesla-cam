@@ -138,6 +138,9 @@ export function App() {
         items={clips}
         lastFolder={lastFolder}
         onOpenFolder={() => inputEl.current?.click()}
+        onDeleteClip={(clip) => {
+          setClips((current) => current.filter((item) => item !== clip));
+        }}
       />
 
       {/* Hidden File Input */}

@@ -7,6 +7,7 @@ export type CamClip = {
   thumb?: File;
   event?: CamClipEvent;
   videos: File[];
+  sourcePaths?: string[];
 };
 
 export type CamClipEvent = {
