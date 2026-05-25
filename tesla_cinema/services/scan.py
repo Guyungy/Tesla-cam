@@ -102,6 +102,68 @@ def scan_teslacam_folder(folder: Path) -> list[CamClip]:
     return clips
 
 
+def probe_duration(path: Path) -> float:
+    """Read video duration by parsing the MP4 mvhd atom directly — no subprocess needed."""
+    try:
+        file_size = path.stat().st_size
+        with path.open("rb") as f:
+            pos = 0
+            while pos + 8 <= file_size:
+                f.seek(pos)
+                raw = f.read(16)
+                if len(raw) < 8:
+                    break
+                size = int.from_bytes(raw[0:4], "big")
+                box_type = raw[4:8]
+                h = 8
+                if size == 1:
+                    if len(raw) < 16:
+                        break
+                    size = int.from_bytes(raw[8:16], "big")
+                    h = 16
+                elif size == 0:
+                    size = file_size - pos
+                if box_type == b"moov":
+                    moov_data = f.read(min(size - h, 131072))
+                    dur = _mvhd_duration(moov_data)
+                    if dur is not None:
+                        return dur
+                    break
+                if size <= 0:
+                    break
+                pos += size
+    except Exception:
+        pass
+    return 60.0
+
+
+def _mvhd_duration(moov: bytes) -> float | None:
+    pos, total = 0, len(moov)
+    while pos + 8 <= total:
+        size = int.from_bytes(moov[pos : pos + 4], "big")
+        box_type = moov[pos + 4 : pos + 8]
+        h = 8
+        if size == 1 and pos + 16 <= total:
+            size = int.from_bytes(moov[pos + 8 : pos + 16], "big")
+            h = 16
+        elif size == 0:
+            size = total - pos
+        if box_type == b"mvhd":
+            body = moov[pos + h :]
+            version = body[0] if body else 0
+            if version == 1:
+                ts = int.from_bytes(body[20:24], "big")
+                dur = int.from_bytes(body[24:32], "big")
+            else:
+                ts = int.from_bytes(body[12:16], "big")
+                dur = int.from_bytes(body[16:20], "big")
+            return float(dur) / ts if ts else None
+        if size <= 8:
+            break
+        pos += size
+    return None
+
+
 def build_footage(clip: CamClip) -> CamFootage:
     segment_map: dict[str, CamSegment] = {}
     for video in clip.videos:
@@ -114,7 +176,11 @@ def build_footage(clip: CamClip) -> CamFootage:
     segments = sorted(segment_map.values(), key=lambda item: item.name)
     total_duration = 0.0
     for segment in segments:
-        segment.duration = 60.0 if segment.cameras else 0.0
+        if segment.cameras:
+            representative = next(iter(segment.cameras.values()))
+            segment.duration = probe_duration(representative)
+        else:
+            segment.duration = 0.0
         segment.start_seconds = total_duration
         total_duration += segment.duration
 
