@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: tesla-cinema
+Version: 2.0.0
+Summary: Tesla dashcam viewer and strict exporter built with Python and PySide6
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: PySide6>=6.8
+Requires-Dist: imageio-ffmpeg>=0.5.1
+Requires-Dist: send2trash>=1.8.3
+Dynamic: license-file
+
+# Tesla Cinema
+
+Tesla dashcam desktop app rewritten as a native Python + PySide6 application.
+
+## Run
+
+```powershell
+python -m pip install -e .
+python -m tesla_cinema
+```
+
+## Stack
+
+- Python 3.11+
+- PySide6 / Qt
+- FFmpeg via `imageio-ffmpeg`
+- `send2trash` for Recycle Bin support
