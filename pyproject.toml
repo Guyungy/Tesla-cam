@@ -1,7 +1,7 @@
 [project]
-name = "tesla-cinema"
+name = "tesla-cinema-tools"
 version = "2.0.0"
-description = "Tesla dashcam viewer and strict exporter built with Python and PySide6"
+description = "Optional Python helpers (SEI tools / experimental PySide6 viewer). Primary app is Electron — see package.json."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tesla-cinema = "tesla_cinema.main:main"
+tesla-cinema-qt = "tesla_cinema.main:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
