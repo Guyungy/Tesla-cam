@@ -25,3 +25,10 @@ dist-ssr
 /release
 /dist-electron
 /release-new
+
+# Python legacy / tools
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
