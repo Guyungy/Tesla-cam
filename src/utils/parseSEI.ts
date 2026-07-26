@@ -6,8 +6,8 @@ export interface RawSEIMessage {
   gearState?: number; // 0=Park, 1=Drive, 2=Reverse, 3=Neutral
   frameSeqNo?: number;
   vehicleSpeedMps?: number;
-  acceleratorPedalPosition?: number; // 0.0-1.0
-  steeringWheelAngle?: number; // radians
+  acceleratorPedalPosition?: number; // percent, 0-100 (see toThrottlePct)
+  steeringWheelAngle?: number; // degrees (see toSteeringDeg)
   blinkerOnLeft?: boolean;
   blinkerOnRight?: boolean;
   brakeApplied?: boolean;
@@ -294,7 +294,11 @@ export function convertToDataPoints(
   }
 
   return messages.map((msg, index) => {
-    const gear = gearMap[msg.gearState ?? -1] || 'UNKNOWN';
+    // Protobuf omits fields that equal the default, so an absent gear/AP field
+    // means 0 — Park / no autopilot — not "unknown". Verified on real footage:
+    // every sample missing gear_state also reports exactly 0 speed and 0 pedal,
+    // in contiguous blocks at the head/tail of a clip (i.e. parked).
+    const gear = gearMap[msg.gearState ?? 0] || 'UNKNOWN';
     let speedKph = toSpeedKph(msg.vehicleSpeedMps);
 
     // Park + near-zero motion: treat as stopped (avoids tiny float noise)
@@ -315,13 +319,10 @@ export function convertToDataPoints(
       offsetSeconds,
       speedKph,
       gear,
-      steeringAngleDeg: (msg.steeringWheelAngle || 0) * (180 / Math.PI),
+      steeringAngleDeg: toSteeringDeg(msg.steeringWheelAngle),
       brakePct: msg.brakeApplied ? 100 : 0,
-      throttlePct: Math.min(
-        100,
-        Math.max(0, (msg.acceleratorPedalPosition || 0) * 100),
-      ),
-      apStatus: apMap[msg.autopilotState ?? -1] || 'UNKNOWN',
+      throttlePct: toThrottlePct(msg.acceleratorPedalPosition),
+      apStatus: apMap[msg.autopilotState ?? 0] || 'UNKNOWN',
       latitude: msg.latitudeDeg || 0,
       longitude: msg.longitudeDeg || 0,
     };
@@ -343,6 +344,30 @@ function toSpeedKph(raw: number | undefined): number {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
+}
+
+/**
+ * Field 6 carries the steering wheel angle in DEGREES, despite the schema note
+ * calling it radians. Measured across 24k samples of real footage: median
+ * |14.6|, p99 |384.7|, max |389.3| — a clean ±~390° envelope matching a wheel
+ * that turns a little over one full rotation each way. Read as radians those
+ * same samples would mean 62 full turns, and the UI gauge showed >22,000°.
+ * Clamped to ±900° (well past any production steering lock) as a backstop.
+ */
+function toSteeringDeg(raw: number | undefined): number {
+  const v = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+  return clamp(v, -900, 900);
+}
+
+/**
+ * Field 5 carries accelerator pedal position as a PERCENT (0–100), not the
+ * 0.0–1.0 fraction the schema note implies: real samples run 0–38 with a
+ * median of 6.8. Multiplying by 100 pinned the throttle bar at 100% for any
+ * pedal press above 1%.
+ */
+function toThrottlePct(raw: number | undefined): number {
+  const v = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+  return clamp(v, 0, 100);
 }
 
 /**

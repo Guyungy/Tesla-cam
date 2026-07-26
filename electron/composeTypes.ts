@@ -30,6 +30,32 @@ export type ComposeDriveWindow = {
   text: string;
 };
 
+/**
+ * Export geometry, computed once in the renderer so the composed video and the
+ * canvas screenshot are laid out from exactly the same numbers. Without this
+ * the two drifted badly: 16:9 cells letterboxed Tesla's 1.54:1 cameras, and the
+ * bar metrics were a separate set of constants.
+ */
+export type ComposeLayout = {
+  width: number;
+  height: number;
+  /** Height of the camera grid; the info bar occupies the remainder. */
+  videoHeight: number;
+  barHeight: number;
+  /** Overlay scale (width / 1280) that all type sizes derive from. */
+  scale: number;
+  padding: number;
+  brandSize: number;
+  titleSize: number;
+  subSize: number;
+  gap: number;
+  iconSize: number;
+  /** Horizontal padding at the bar edges. */
+  hPad: number;
+  /** Left edge of the text column, i.e. past the icon. */
+  leftTextX: number;
+};
+
 export type ComposeOverlay = {
   showTime?: boolean;
   showLocation?: boolean;
@@ -41,6 +67,15 @@ export type ComposeOverlay = {
   baseTimestampEpoch?: number;
   /** Pre-sampled drive telemetry windows (speed / gear / AP). */
   driveWindows?: ComposeDriveWindow[];
+  /**
+   * Per-second localized timestamps. FFmpeg's `%{pts:localtime:…}` can only
+   * emit `YYYY-MM-DD HH:MM:SS` — its format argument renders nothing on this
+   * build, and `%{…}` is never expanded from a textfile — so matching the
+   * app's localized timestamp means pre-rendering one gated window per second.
+   */
+  timeWindows?: ComposeDriveWindow[];
+  /** Small brand line above the timestamp, matching the canvas overlay. */
+  brandText?: string;
 };
 
 export type ComposeExportRequest = {
@@ -52,6 +87,8 @@ export type ComposeExportRequest = {
   segments: ComposeSegment[];
   overlay?: ComposeOverlay;
   labels?: Partial<Record<CamName, string>>;
+  /** Geometry from the renderer; falls back to legacy constants when absent. */
+  layout?: ComposeLayout;
   fps?: number;
   /** Use a hardware H.264 encoder when one is detected (default true). */
   useHardware?: boolean;

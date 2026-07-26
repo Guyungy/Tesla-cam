@@ -25,6 +25,10 @@ declare global {
         canceled?: boolean;
         error?: string;
         trashedCount?: number;
+        /** Files that could not be removed (partial delete). */
+        failedCount?: number;
+        /** True when the drive has no Recycle Bin and files were erased. */
+        permanent?: boolean;
       }>;
 
       // Fast compose export

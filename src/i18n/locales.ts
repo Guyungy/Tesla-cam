@@ -72,6 +72,8 @@ export const locales = {
     'toast.noMetadata': '没有可用的元数据用于 CSV 导出',
     'toast.csvFailed': 'CSV 导出失败: {error}',
     'toast.clipDeleted': '片段已移到回收站',
+    'toast.clipDeletedPermanent': '片段已永久删除（该磁盘无回收站）',
+    'toast.clipDeletedPartial': '已删除 {count} 个文件，{failed} 个失败',
     'toast.deleteFailed': '删除失败: {error}',
 
     // Home
@@ -105,6 +107,8 @@ export const locales = {
     'settings.exportLocation': '显示位置',
     'settings.exportDriveData': '显示驾驶数据',
     'settings.exportHwAccel': '硬件加速编码（更快）',
+    'settings.exportVideoWidth': '视频导出分辨率',
+    'settings.exportVideoWidthHint': '截图始终最高画质',
 
     // Camera labels (export overlay)
     'cam.front': '前方',
@@ -194,6 +198,9 @@ export const locales = {
     'toast.noMetadata': 'No metadata available for CSV export',
     'toast.csvFailed': 'CSV export failed: {error}',
     'toast.clipDeleted': 'Clip moved to Recycle Bin',
+    'toast.clipDeletedPermanent':
+      'Clip deleted permanently (drive has no Recycle Bin)',
+    'toast.clipDeletedPartial': 'Deleted {count} file(s), {failed} failed',
     'toast.deleteFailed': 'Delete failed: {error}',
 
     // Home
@@ -228,6 +235,8 @@ export const locales = {
     'settings.exportLocation': 'Show Location',
     'settings.exportDriveData': 'Show Driving Data',
     'settings.exportHwAccel': 'Hardware-accelerated encoding (faster)',
+    'settings.exportVideoWidth': 'Video export resolution',
+    'settings.exportVideoWidthHint': 'Screenshots stay full quality',
 
     // Camera labels (export overlay)
     'cam.front': 'Front',

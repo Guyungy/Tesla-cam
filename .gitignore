@@ -39,3 +39,5 @@ venv/
 # Test artifacts
 test-results/
 playwright-report/
+ui-shots/
+dev-run.log

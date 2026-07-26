@@ -89,6 +89,40 @@ function even(n: number): number {
   return r % 2 === 0 ? r : r + 1;
 }
 
+/** Round down to even, so N cells never exceed the canvas they sit in. */
+function evenDown(n: number): number {
+  const r = Math.max(2, Math.floor(n));
+  return r % 2 === 0 ? r : r - 1;
+}
+
+/**
+ * Bar metrics when the renderer did not supply a layout. Mirrors
+ * resolveOverlayBarLayout in the renderer: the bar is sized by its contents so
+ * the text can never spill out of it.
+ */
+function defaultBarLayout(width: number) {
+  const s = width / 1280;
+  const padding = Math.max(4, Math.round(8 * s));
+  const brandSize = Math.max(9, Math.round(11 * s));
+  const titleSize = Math.max(16, Math.round(28 * s));
+  const subSize = Math.max(12, Math.round(15 * s));
+  const gap = Math.max(2, Math.round(4 * s));
+  const iconSize = Math.max(22, Math.round(30 * s));
+  const hPad = Math.round(22 * s);
+  return {
+    scale: s,
+    padding,
+    brandSize,
+    titleSize,
+    subSize,
+    gap,
+    iconSize,
+    hPad,
+    leftTextX: hPad + iconSize + Math.round(16 * s),
+    barHeight: even(padding * 2 + brandSize + gap + titleSize),
+  };
+}
+
 /**
  * Escape a path for use as a quoted filtergraph option value:
  * `fontfile='C\:/Windows/…'`. Verified against ffmpeg 6.1: an UNQUOTED
@@ -153,13 +187,18 @@ class TextFilePool {
   private dir: string | null = null;
   private files = new Map<string, string>();
 
+  /** Temp dir, created on demand — also used for the filtergraph script. */
+  ensureDir(): string {
+    if (!this.dir) {
+      this.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teslacam-compose-'));
+    }
+    return this.dir;
+  }
+
   ref(text: string): string {
     let file = this.files.get(text);
     if (!file) {
-      if (!this.dir) {
-        this.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teslacam-compose-'));
-      }
-      file = path.join(this.dir, `t${this.files.size}.txt`);
+      file = path.join(this.ensureDir(), `t${this.files.size}.txt`);
       fs.writeFileSync(file, text, 'utf8');
       this.files.set(text, file);
     }
@@ -277,12 +316,27 @@ function layoutSize(viewType: ComposeViewType): {
 export function prepareComposeExport(
   req: ComposeExportRequest,
   outputPath: string,
-  opts: { encoder?: string } = {},
+  opts: { encoder?: string; iconPath?: string } = {},
 ): PreparedCompose {
   const encoder = opts.encoder || 'libx264';
   const fps = req.fps && req.fps > 0 ? req.fps : 30;
   const cams = camsForView(req.viewType);
-  const { width, height, videoHeight } = layoutSize(req.viewType);
+  const legacy = layoutSize(req.viewType);
+  const width = req.layout?.width ?? legacy.width;
+  const videoHeight = req.layout?.videoHeight ?? legacy.videoHeight;
+  const bar = req.layout ?? defaultBarLayout(width);
+  const barHeight = bar.barHeight;
+  const height = req.layout?.height ?? even(videoHeight + barHeight);
+  const gridCellW = evenDown(width / (req.viewType === 'grid4' ? 2 : 3));
+  const gridCellH = evenDown(videoHeight / 2);
+
+  // The overlay glyph is decorative: if it cannot be read, drop it rather than
+  // handing FFmpeg an input that fails the whole encode. This bit an installed
+  // build, where the path resolved inside app.asar and only ffmpeg could tell.
+  const iconPath =
+    opts.iconPath && bar.iconSize > 0 && fs.existsSync(opts.iconPath)
+      ? opts.iconPath
+      : undefined;
 
   const inputPaths: string[] = [];
   const camGroups: { cam: CamName; pieces: Piece[]; inputOffset: number }[] =
@@ -315,17 +369,19 @@ export function prepareComposeExport(
     const group = camGroups[g];
     const pieceLabels: string[] = [];
 
-    let cellW = CELL_W;
-    let cellH = CELL_H;
+    // Cells are carved out of the real canvas rather than fixed 16:9 blocks.
+    // Tesla cameras are 1.54:1, so 960x540 cells letterboxed every one of them.
+    let cellW = gridCellW;
+    let cellH = gridCellH;
     if (req.viewType === 'grid4old' && group.cam === 'front') {
-      cellW = CELL_W * 3;
-      cellH = Math.round(CELL_H * 2 * 0.6);
+      cellW = evenDown(width);
+      cellH = evenDown(videoHeight * 0.6);
     } else if (req.viewType === 'grid4old') {
-      cellW = CELL_W;
-      cellH = Math.round(CELL_H * 2 * 0.4);
+      cellW = evenDown(width / 3);
+      cellH = evenDown(videoHeight * 0.4);
     } else if (!req.viewType.startsWith('grid')) {
-      cellW = width;
-      cellH = videoHeight;
+      cellW = evenDown(width);
+      cellH = evenDown(videoHeight);
     }
 
     const concatOut = `cam${g}`;
@@ -360,10 +416,16 @@ export function prepareComposeExport(
     const label = camLabels[group.cam];
     let scaleChain = `[${concatOut}raw]scale=${even(cellW)}:${even(cellH)}:force_original_aspect_ratio=decrease,pad=${even(cellW)}:${even(cellH)}:(ow-iw)/2:(oh-ih)/2:black`;
     if (label) {
+      // Label metrics track the canvas overlay (labelFontSize = 14 * scale)
+      // instead of a fixed 18px that vanishes at export resolutions.
+      const labelFont = Math.max(11, Math.round(14 * bar.scale));
+      const labelPad = Math.max(4, Math.round(6 * bar.scale));
+      const labelMargin = Math.max(8, Math.round(12 * bar.scale));
       const dt = drawtextFile(
         textPool,
         label,
-        'fontsize=18:fontcolor=white@0.9:box=1:boxcolor=black@0.5:boxborderw=6:x=w-tw-12:y=h-th-12',
+        `fontsize=${labelFont}:fontcolor=white@0.9:box=1:boxcolor=black@0.5:` +
+          `boxborderw=${labelPad}:x=w-tw-${labelMargin}:y=h-th-${labelMargin}`,
       );
       if (dt) scaleChain += `,${dt}`;
     }
@@ -374,11 +436,11 @@ export function prepareComposeExport(
 
   if (req.viewType === 'grid6') {
     filterParts.push(
-      `${scaledPads.join('')}xstack=inputs=6:layout=0_0|${CELL_W}_0|${CELL_W * 2}_0|0_${CELL_H}|${CELL_W}_${CELL_H}|${CELL_W * 2}_${CELL_H}[grid]`,
+      `${scaledPads.join('')}xstack=inputs=6:layout=0_0|${gridCellW}_0|${gridCellW * 2}_0|0_${gridCellH}|${gridCellW}_${gridCellH}|${gridCellW * 2}_${gridCellH}[grid]`,
     );
   } else if (req.viewType === 'grid4') {
     filterParts.push(
-      `${scaledPads.join('')}xstack=inputs=4:layout=0_0|${CELL_W}_0|0_${CELL_H}|${CELL_W}_${CELL_H}[grid]`,
+      `${scaledPads.join('')}xstack=inputs=4:layout=0_0|${gridCellW}_0|0_${gridCellH}|${gridCellW}_${gridCellH}[grid]`,
     );
   } else if (req.viewType === 'grid4old') {
     filterParts.push(
@@ -394,50 +456,132 @@ export function prepareComposeExport(
 
   let current = 'base';
   let step = 0;
-  const pushOverlay = (dt: string | null) => {
-    if (!dt) return;
+  /** Chain any single-input filter expression onto the overlay stack. */
+  const chain = (expr: string | null) => {
+    if (!expr) return;
     const next = `ov${step++}`;
-    filterParts.push(`[${current}]${dt}[${next}]`);
+    filterParts.push(`[${current}]${expr}[${next}]`);
     current = next;
   };
 
+  // ── Bottom info bar, matching the canvas overlay in Viewer.drawFrame ──
+  const barY = videoHeight;
+  const brandY = barY + bar.padding;
+  const titleY = brandY + bar.brandSize + bar.gap;
+
+  chain(
+    `drawbox=x=0:y=${barY}:w=${width}:h=${barHeight}:color=0x111111@1:t=fill`,
+  );
+  chain(`drawbox=x=0:y=${barY}:w=${width}:h=1:color=white@0.1:t=fill`);
+
+  // Tesla mark on a faint red plate, vertically centred in the bar.
+  if (iconPath) {
+    const iconX = bar.hPad;
+    const iconY = Math.round(barY + (barHeight - bar.iconSize) / 2);
+    const plateX = iconX - Math.round(8 * bar.scale);
+    const plateY = iconY - Math.round(6 * bar.scale);
+    chain(
+      `drawbox=x=${plateX}:y=${plateY}:` +
+        `w=${bar.iconSize + Math.round(16 * bar.scale)}:` +
+        `h=${bar.iconSize + Math.round(12 * bar.scale)}:` +
+        `color=0xe11d48@0.12:t=fill`,
+    );
+    const iconIn = inputPaths.length; // appended after every video input
+    filterParts.push(
+      `[${iconIn}:v]scale=${bar.iconSize}:${bar.iconSize}[teslaicon]`,
+    );
+    const next = `ov${step++}`;
+    filterParts.push(
+      `[${current}][teslaicon]overlay=${iconX}:${iconY}:format=auto[${next}]`,
+    );
+    current = next;
+  }
+
   if (overlay.showTime !== false) {
-    const epoch = overlay.baseTimestampEpoch;
-    const timeStyle = `fontsize=22:fontcolor=white:x=16:y=h-${BOTTOM_BAR}+18`;
-    if (typeof epoch === 'number' && Number.isFinite(epoch)) {
-      // Live clock: pts (starts at 0 after setpts) + export-start epoch,
-      // rendered with localtime's default '%Y-%m-%d %H:%M:%S' format.
-      pushOverlay(
-        drawtextRaw(`%{pts\\:localtime\\:${Math.round(epoch)}}`, timeStyle),
+    if (overlay.brandText) {
+      chain(
+        drawtextFile(
+          textPool,
+          overlay.brandText,
+          `fontsize=${bar.brandSize}:fontcolor=0xfb7185:x=${bar.leftTextX}:y=${brandY}`,
+        ),
+      );
+    }
+
+    const titleStyle = `fontsize=${bar.titleSize}:fontcolor=0xfafafa:x=${bar.leftTextX}:y=${titleY}`;
+    if (overlay.timeWindows?.length) {
+      // Pre-rendered localized timestamps, one gated window per second.
+      for (const w of overlay.timeWindows) {
+        if (!w.text || !(w.end > w.start)) continue;
+        chain(
+          drawtextFile(
+            textPool,
+            w.text,
+            `${titleStyle}:enable='between(t,${w.start.toFixed(3)},${w.end.toFixed(3)})'`,
+          ),
+        );
+      }
+    } else if (
+      typeof overlay.baseTimestampEpoch === 'number' &&
+      Number.isFinite(overlay.baseTimestampEpoch)
+    ) {
+      // Fallback: ffmpeg's own clock, fixed 'YYYY-MM-DD HH:MM:SS' format.
+      chain(
+        drawtextRaw(
+          `%{pts\\:localtime\\:${Math.round(overlay.baseTimestampEpoch)}}`,
+          titleStyle,
+        ),
       );
     } else if (overlay.baseTimestampLabel) {
-      pushOverlay(
-        drawtextFile(textPool, overlay.baseTimestampLabel, timeStyle),
-      );
+      chain(drawtextFile(textPool, overlay.baseTimestampLabel, titleStyle));
     }
   }
 
+  const hasDriveText = !!(
+    overlay.showDriveData && overlay.driveWindows?.length
+  );
+
   if (overlay.showLocation && overlay.locationText) {
-    pushOverlay(
+    // Location is centred when it owns the right side, and moves up when the
+    // drive readout also needs a row there.
+    const locY = hasDriveText
+      ? barY + bar.padding
+      : Math.round(barY + (barHeight - bar.subSize) / 2);
+    const locStyle = `fontsize=${bar.subSize}:x=w-tw-${bar.hPad}:y=${locY}`;
+
+    // The red accent to the left of the text. FFmpeg cannot reference another
+    // filter's text width, and measuring it in the renderer misplaces the bar
+    // because the two use different fonts. Instead draw the same string twice,
+    // both right-aligned to the same edge: the red pass carries a leading bar
+    // glyph and is wider, so once the plain pass paints over it only that
+    // glyph is left showing — exact at any width, no measurement.
+    chain(
+      drawtextFile(
+        textPool,
+        `▌ ${overlay.locationText}`,
+        `${locStyle}:fontcolor=0xef4444`,
+      ),
+    );
+    chain(
       drawtextFile(
         textPool,
         overlay.locationText,
-        `fontsize=18:fontcolor=0xD4D4D8:x=16:y=h-${BOTTOM_BAR}+40`,
+        `${locStyle}:fontcolor=0xD4D4D8`,
       ),
     );
   }
 
   if (overlay.showDriveData && overlay.driveWindows?.length) {
     // One drawtext per pre-sampled window, gated by enable=between(t,…).
-    // The renderer caps window count, but clamp here too as a backstop.
-    const windows = overlay.driveWindows.slice(0, 400);
-    for (const w of windows) {
+    for (const w of overlay.driveWindows) {
       if (!w.text || !(w.end > w.start)) continue;
-      pushOverlay(
+      chain(
         drawtextFile(
           textPool,
           w.text,
-          `fontsize=20:fontcolor=0x22c55e:x=w-tw-16:y=h-${BOTTOM_BAR}+24:enable='between(t,${w.start.toFixed(3)},${w.end.toFixed(3)})'`,
+          `fontsize=${bar.subSize}:fontcolor=0x22c55e:x=w-tw-${bar.hPad}:` +
+            `y=${barY + barHeight - bar.subSize - bar.padding}:` +
+            `enable='between(t,${w.start.toFixed(3)},${w.end.toFixed(3)})'`,
         ),
       );
     }
@@ -450,9 +594,19 @@ export function prepareComposeExport(
   for (const p of inputPaths) {
     args.push('-i', p);
   }
+  if (iconPath) {
+    args.push('-i', iconPath);
+  }
+
+  // The graph goes in a file, not argv. Windows caps a command line at 32767
+  // characters and one gated drawtext per second of export runs ~240 chars —
+  // past ~150 windows ffmpeg simply failed to spawn, so long exports with
+  // drive data or a localized clock could never work from argv.
+  const graphFile = path.join(textPool.ensureDir(), 'filtergraph.txt');
+  fs.writeFileSync(graphFile, filterComplex, 'utf8');
   args.push(
-    '-filter_complex',
-    filterComplex,
+    '-filter_complex_script',
+    graphFile,
     '-map',
     '[vout]',
     '-an',

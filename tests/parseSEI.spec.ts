@@ -70,12 +70,13 @@ test('speed conversion: m/s → km/h, park low-speed clamp, absurd values capped
   expect(absurd[0].speedKph).toBeLessThanOrEqual(300);
 });
 
-test('gear / AP status mapping and throttle clamping', () => {
+test('gear / AP status mapping and pedal + steering units', () => {
   const pts = convertToDataPoints(
     msgs(1, {
       gearState: 2,
       autopilotState: 1,
-      acceleratorPedalPosition: 1.7,
+      acceleratorPedalPosition: 38,
+      steeringWheelAngle: 389.3,
       brakeApplied: true,
     }),
     0,
@@ -83,11 +84,42 @@ test('gear / AP status mapping and throttle clamping', () => {
   );
   expect(pts[0].gear).toBe('R');
   expect(pts[0].apStatus).toBe('FSD');
-  expect(pts[0].throttlePct).toBe(100);
+  // Pedal is a percent, not a 0–1 fraction: 38 means 38%, not 100%.
+  expect(pts[0].throttlePct).toBe(38);
+  // Steering is degrees, not radians: 389.3 must not become 22,300°.
+  expect(pts[0].steeringAngleDeg).toBeCloseTo(389.3, 3);
   expect(pts[0].brakePct).toBe(100);
 
   const unknown = convertToDataPoints(msgs(1, { gearState: 99 }), 0, 0);
   expect(unknown[0].gear).toBe('UNKNOWN');
+});
+
+test('absent gear / AP fields decode as the protobuf default (P / OFF)', () => {
+  // proto3 omits zero-valued fields, so a parked car sends no gear_state at all.
+  const pts = convertToDataPoints(
+    [{ vehicleSpeedMps: 0, frameSeqNo: 0 }],
+    0,
+    0,
+  );
+  expect(pts[0].gear).toBe('P');
+  expect(pts[0].apStatus).toBe('OFF');
+});
+
+test('out-of-range pedal and steering are clamped, not wrapped', () => {
+  const pts = convertToDataPoints(
+    msgs(1, { acceleratorPedalPosition: 170, steeringWheelAngle: -5000 }),
+    0,
+    0,
+  );
+  expect(pts[0].throttlePct).toBe(100);
+  expect(pts[0].steeringAngleDeg).toBe(-900);
+
+  const negative = convertToDataPoints(
+    msgs(1, { acceleratorPedalPosition: -5 }),
+    0,
+    0,
+  );
+  expect(negative[0].throttlePct).toBe(0);
 });
 
 test('empty input yields empty output', () => {

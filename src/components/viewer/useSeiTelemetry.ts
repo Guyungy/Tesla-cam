@@ -1,7 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 
 import type { CamClip, CamFootage, SEIDataPoint } from '../../utils';
-import { detectHardBraking, extractFootageSEI } from '../../utils';
+import {
+  detectHardBraking,
+  extractFootageSEI,
+  shareInflight,
+} from '../../utils';
+
+/**
+ * Extractions currently running, keyed by clip name, so repeated effect runs
+ * for the same clip attach to one parse instead of starting or blocking each
+ * other. Module scope: it must outlive an effect cleanup/setup cycle.
+ */
+const inflightSei = new Map<string, Promise<SEIDataPoint[] | undefined>>();
 
 type Params = {
   clip: CamClip;
@@ -24,36 +35,42 @@ export function useSeiTelemetry({
   clipPlayedSeconds,
 }: Params) {
   // ── Lazy SEI metadata extraction (runs once per clip, off-thread) ──
-  const seiLoadingRef = useRef(false);
   useEffect(() => {
     if (footage.seiData) return; // Already loaded
-    if (seiLoadingRef.current) return; // Already in progress
-    seiLoadingRef.current = true;
+    const clipName = clip.name;
 
+    // Share the in-flight extraction by clip rather than latching a boolean.
+    // StrictMode runs effects twice in development: the first pass' cleanup
+    // discarded its own result, and the old boolean guard was never reset, so
+    // the second pass returned early and telemetry stayed blank forever.
+    // Reusing the promise makes the second pass adopt the first pass' work
+    // instead of re-parsing several hundred MB.
+    const task = shareInflight(inflightSei, clipName, () => {
+      console.log(
+        '[SEI] Starting metadata extraction for',
+        clip.videos.length,
+        'video files...',
+      );
+      return extractFootageSEI(clip.videos, footage);
+    });
+
+    // Still drop the result on a real unmount — delivering it would push a
+    // previous clip's footage back into a viewer that has moved on.
     let cancelled = false;
-    console.log(
-      '[SEI] Starting metadata extraction for',
-      clip.videos.length,
-      'video files...',
-    );
-    extractFootageSEI(clip.videos, footage)
+    task
       .then((seiData) => {
         if (cancelled) return;
-        seiLoadingRef.current = false;
-        if (seiData) {
+        if (seiData?.length) {
           console.log('[SEI] Found', seiData.length, 'data points');
-          if (onFootageUpdate) {
-            onFootageUpdate({ ...footage, seiData });
-          }
+          onFootageUpdate?.({ ...footage, seiData });
         } else {
           console.log(
-            '[SEI] No metadata found (video may be from firmware < 2025.44.25)',
+            '[SEI] No telemetry in this clip (parked or pre-2025.44)',
           );
         }
       })
       .catch((e) => {
         if (cancelled) return;
-        seiLoadingRef.current = false;
         console.warn('[SEI] Extraction failed:', e);
       });
 

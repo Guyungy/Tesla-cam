@@ -4,7 +4,7 @@ import { VscClose } from 'react-icons/vsc';
 import type { Locale } from '../i18n';
 import { useI18n } from '../i18n';
 import { useAppSettings } from './useAppSettings';
-import { useExportSettings } from './useExportSettings';
+import { useExportSettings, VIDEO_WIDTH_OPTIONS } from './useExportSettings';
 
 type Props = {
   open: boolean;
@@ -23,7 +23,13 @@ export function Settings({ open, onClose }: Props) {
 
   if (!open) return null;
 
-  const toggles: { key: keyof typeof exportSettings; label: string }[] = [
+  type BooleanSetting = {
+    [K in keyof typeof exportSettings]: (typeof exportSettings)[K] extends boolean
+      ? K
+      : never;
+  }[keyof typeof exportSettings];
+
+  const toggles: { key: BooleanSetting; label: string }[] = [
     { key: 'showTime', label: t('settings.exportTime') },
     { key: 'showLocation', label: t('settings.exportLocation') },
     { key: 'showDriveData', label: t('settings.exportDriveData') },
@@ -124,6 +130,34 @@ export function Settings({ open, onClose }: Props) {
                   }
                 />
               ))}
+
+              {/* Video resolution — screenshots always use full quality */}
+              <div className="rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2.5">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm text-neutral-300">
+                    {t('settings.exportVideoWidth')}
+                  </span>
+                  <span className="text-[11px] text-neutral-500">
+                    {t('settings.exportVideoWidthHint')}
+                  </span>
+                </div>
+                <div className="flex gap-1.5">
+                  {VIDEO_WIDTH_OPTIONS.map((w) => (
+                    <button
+                      key={w}
+                      onClick={() => setExportSettings({ videoMaxWidth: w })}
+                      className={clsx(
+                        'flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                        exportSettings.videoMaxWidth === w
+                          ? 'bg-brand-primary text-white'
+                          : 'bg-white/5 text-neutral-400 hover:bg-white/10',
+                      )}
+                    >
+                      {w === 3840 ? '4K' : `${w}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>

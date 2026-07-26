@@ -1,15 +1,22 @@
 import dayjs from 'dayjs';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
+import type { ComposeLayout } from '../../../electron/composeTypes';
 import type { TranslationKey } from '../../i18n';
 import type {
   CamClip,
   CamFootage,
   CamName,
+  ExportCanvasSize,
   SeekInfo,
   ViewType,
 } from '../../utils';
-import { calcSeekInfo, parseTime } from '../../utils';
+import {
+  calcSeekInfo,
+  parseTime,
+  resolveOverlayBarLayout,
+  selectSegmentsInRange,
+} from '../../utils';
 import type { ExportSettings } from '../useExportSettings';
 
 /** Canvas RGBA pipe is heavy — keep a cap. Compose export can go longer. */
@@ -41,11 +48,7 @@ type Params = {
     layout: ViewType,
     videoHeight: number,
   ) => void;
-  resolveCanvasSize: () => {
-    width: number;
-    height: number;
-    videoHeight: number;
-  };
+  resolveCanvasSize: (maxWidth?: number) => ExportCanvasSize;
   /** Update the time/location shown by drawFrame's overlay */
   setOverlayTimeLocation: (time: string, location: string) => void;
   locationText: string;
@@ -191,14 +194,19 @@ export function useVideoExport({
     });
   };
 
-  /** Read raw RGBA bytes from canvas for fast FFmpeg piping */
+  /**
+   * Read raw RGBA bytes from canvas for FFmpeg piping.
+   * The ImageData buffer is freshly allocated by getImageData and not reused,
+   * so it can be viewed directly — the previous `.slice(0)` doubled peak
+   * memory for every frame (another 28 MB per frame at 4K).
+   */
   const canvasToRgbaBytes = (
     ctx: CanvasRenderingContext2D,
     width: number,
     height: number,
   ): Uint8Array => {
     const imageData = ctx.getImageData(0, 0, width, height);
-    return new Uint8Array(imageData.data.buffer.slice(0));
+    return new Uint8Array(imageData.data.buffer);
   };
 
   const waitForLayoutCommit = useCallback(
@@ -235,48 +243,121 @@ export function useVideoExport({
     [footage, players, waitForLayoutCommit, segmentIndexRef, setSegmentIndex],
   );
 
-  /** Resolve absolute disk paths for each segment/camera from clip.videos */
-  const buildComposeSegments = useCallback(() => {
-    const pathByName: Record<string, string> = {};
-    for (const file of clip.videos) {
-      try {
-        const p = window.electronAPI?.getPathForFile(file);
-        if (p) pathByName[file.name] = p;
-      } catch {
-        /* ignore */
-      }
-    }
+  /**
+   * Resolve absolute disk paths per segment/camera, limited to the segments the
+   * export window actually touches.
+   *
+   * Sending the whole clip made the main process stat every path it was given:
+   * a RecentClips folder is 174 segments / 1044 files, all validated to encode
+   * a window that overlaps one or two of them.
+   */
+  const buildComposeSegments = useCallback(
+    (rangeStart: number, rangeDuration: number) => {
+      const resolveCam = (fileName: string): CamName | undefined => {
+        const restName = fileName.slice(20);
+        if (restName.startsWith('front')) return 'front';
+        if (restName.startsWith('back')) return 'back';
+        if (restName.startsWith('left_repeater')) return 'left';
+        if (restName.startsWith('right_repeater')) return 'right';
+        if (restName.startsWith('left_pillar')) return 'left_pillar';
+        if (restName.startsWith('right_pillar')) return 'right_pillar';
+        return undefined;
+      };
 
-    const resolveCam = (fileName: string): CamName | undefined => {
-      const restName = fileName.slice(20);
-      if (restName.startsWith('front')) return 'front';
-      if (restName.startsWith('back')) return 'back';
-      if (restName.startsWith('left_repeater')) return 'left';
-      if (restName.startsWith('right_repeater')) return 'right';
-      if (restName.startsWith('left_pillar')) return 'left_pillar';
-      if (restName.startsWith('right_pillar')) return 'right_pillar';
-      return undefined;
-    };
+      const inRange = selectSegmentsInRange(
+        footage.segments,
+        rangeStart,
+        rangeDuration,
+      );
+      const wanted = new Set(inRange.map((seg) => seg.name));
 
-    return footage.segments.map((seg) => {
-      const paths: Record<string, string | undefined> = {};
-      for (const cam of Object.keys(camLabels) as CamName[]) {
-        // File name pattern: YYYY-MM-DD_HH-MM-SS-{cam}.mp4
-        const match = clip.videos.find(
-          (f) => f.name.startsWith(seg.name) && resolveCam(f.name) === cam,
-        );
-        if (match && pathByName[match.name]) {
-          paths[cam] = pathByName[match.name];
+      // Index the needed files in one pass instead of scanning clip.videos
+      // once per (segment × camera).
+      const pathBySegCam = new Map<string, string>();
+      for (const file of clip.videos) {
+        const segName = file.name.slice(0, 19);
+        if (!wanted.has(segName)) continue;
+        const cam = resolveCam(file.name);
+        if (!cam) continue;
+        try {
+          const p = window.electronAPI?.getPathForFile(file);
+          if (p) pathBySegCam.set(`${segName}|${cam}`, p);
+        } catch {
+          /* unresolvable path — cell becomes a black placeholder */
         }
       }
-      return {
-        name: seg.name,
-        startSeconds: seg.startSeconds,
-        duration: seg.duration,
-        paths,
-      };
-    });
-  }, [clip.videos, footage.segments, camLabels]);
+
+      return inRange.map((seg) => {
+        const paths: Record<string, string | undefined> = {};
+        for (const cam of Object.keys(camLabels) as CamName[]) {
+          const p = pathBySegCam.get(`${seg.name}|${cam}`);
+          if (p) paths[cam] = p;
+        }
+        return {
+          name: seg.name,
+          startSeconds: seg.startSeconds,
+          duration: seg.duration,
+          paths,
+        };
+      });
+    },
+    [clip.videos, footage.segments, camLabels],
+  );
+
+  /**
+   * Geometry for the compose export — the same numbers the screenshot canvas
+   * uses, so the two outputs are laid out identically instead of each applying
+   * its own constants.
+   */
+  const buildComposeLayout = useCallback((): ComposeLayout => {
+    // Video honours the resolution setting; screenshots stay at full quality.
+    const size = resolveCanvasSize(exportSettings.videoMaxWidth);
+    const barLayout = resolveOverlayBarLayout(size.scale);
+    const hPad = Math.round(22 * size.scale);
+    const leftTextX = hPad + barLayout.iconSize + Math.round(16 * size.scale);
+
+    return {
+      width: size.width,
+      height: size.height,
+      videoHeight: size.videoHeight,
+      barHeight: size.barHeight,
+      scale: size.scale,
+      padding: barLayout.padding,
+      brandSize: barLayout.brandSize,
+      titleSize: barLayout.titleSize,
+      subSize: barLayout.subSize,
+      gap: barLayout.gap,
+      iconSize: barLayout.iconSize,
+      hPad,
+      leftTextX,
+    };
+  }, [resolveCanvasSize, exportSettings.videoMaxWidth]);
+
+  /**
+   * One localized timestamp per second of the export. FFmpeg's built-in clock
+   * can only render `YYYY-MM-DD HH:MM:SS`, which does not match what the app
+   * and the screenshot show.
+   */
+  const buildTimeWindows = useCallback(
+    (rangeStart: number, rangeDuration: number) => {
+      const windows: { start: number; end: number; text: string }[] = [];
+      const total = Math.ceil(rangeDuration);
+      for (let i = 0; i < total; i++) {
+        const info = calcSeekInfo(footage, rangeStart + i);
+        if (!info) continue;
+        const text = dayjs(parseTime(footage.segments[info.index].name))
+          .add(info.seconds, 'second')
+          .format(timestampFmt);
+        windows.push({
+          start: i,
+          end: Math.min(i + 1, rangeDuration),
+          text,
+        });
+      }
+      return windows;
+    },
+    [footage, timestampFmt],
+  );
 
   // ── Export entry point ──
   const exportCurrentView = useCallback(async () => {
@@ -346,8 +427,9 @@ export function useVideoExport({
           viewType,
           startSeconds: exportStartSeconds,
           durationSeconds: exportableSeconds,
-          segments: buildComposeSegments(),
+          segments: buildComposeSegments(exportStartSeconds, exportableSeconds),
           labels: camLabels,
+          layout: buildComposeLayout(),
           overlay: {
             showTime: exportSettings.showTime,
             showLocation: exportSettings.showLocation,
@@ -356,11 +438,17 @@ export function useVideoExport({
             baseTimestampLabel:
               exportStartMoment?.format(timestampFmt) ?? formatTime,
             baseTimestampEpoch: exportStartMoment?.unix(),
+            brandText: 'TESLA CINEMA',
+            timeWindows: exportSettings.showTime
+              ? buildTimeWindows(exportStartSeconds, exportableSeconds)
+              : undefined,
             driveWindows: exportSettings.showDriveData
               ? buildDriveWindows(exportStartSeconds, exportableSeconds)
               : undefined,
           },
-          fps: 30,
+          // Omitted on purpose: the main process reads the real source rate
+          // (~36 fps on current firmware, ~24 on older clips) instead of
+          // resampling everything to a fixed 30.
           useHardware: exportSettings.hwAccel,
         });
 
@@ -569,7 +657,9 @@ export function useVideoExport({
     waitForLayoutCommit,
     canUseComposeExport,
     buildComposeSegments,
+    buildComposeLayout,
     buildDriveWindows,
+    buildTimeWindows,
     exportSettings,
     formatTime,
     camLabels,

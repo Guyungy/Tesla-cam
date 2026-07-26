@@ -11,6 +11,7 @@ import { useI18n } from '../i18n';
 import {
   type CamClip,
   type CamFootage,
+  deleteResultToast,
   genFootage,
   revokeFootage,
 } from '../utils';
@@ -146,7 +147,8 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
       setClip(undefined);
     }
 
-    setToastMsg(t('toast.clipDeleted'));
+    const toast = deleteResultToast(result);
+    setToastMsg(t(toast.key, toast.params));
     return result;
   };
 
