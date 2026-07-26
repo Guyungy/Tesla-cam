@@ -64,10 +64,22 @@ A compact live track panel overlays the video: the clip's full driving path
 with a playhead marker that moves as you scrub. Pure SVG rendered from SEI
 GPS samples — fully offline, no map tiles. Collapsible with one click.
 
+### Incident Intelligence
+
+- **Hard-braking marks** — sharp speed drops with brake input are detected
+  from SEI telemetry and flagged on the timeline as amber markers, so
+  collisions and near-misses are one glance away
+- **Auto-jump to event** — event clips open just before the recorded moment
+  (AEB −3s, Sentry/Saved −5s) instead of at the start
+- **Sentry camera focus** — Sentry clips open on the camera that triggered
+  the alert (from `event.json`), falling back to the grid when unknown
+- All three are toggleable in Settings
+
 ### Playback & Navigation
 
 - **Auto-play next clip** when the current one ends (toggle in Settings)
 - **↑ / ↓** — jump to the previous / next clip without touching the mouse
+- **Delete** — triage flow: confirm, trash the clip, auto-advance to the next
 - **Space** play/pause · **← / →** ±5s · **Shift+← / →** ±1s
 - **, / .** — frame-by-frame stepping (pauses playback for precise scrubbing)
 - **M** mute · **F** fullscreen · **P** picture-in-picture · **I / O** export in/out points

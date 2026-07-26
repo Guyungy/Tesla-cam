@@ -28,6 +28,7 @@ export const locales = {
     'viewer.exporting': '导出中...',
     'viewer.jumpToEvent': '跳转到事件',
     'viewer.clearInOut': '清除',
+    'viewer.hardBraking': '急刹车',
 
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: 播放/暂停',
@@ -97,6 +98,8 @@ export const locales = {
     'settings.close': '关闭',
     'settings.playback': '播放',
     'settings.autoAdvance': '播完自动连播下一段',
+    'settings.autoSeekEvent': '打开片段自动定位到事件',
+    'settings.sentryCameraFocus': '哨兵事件聚焦触发摄像头',
     'settings.export': '导出选项',
     'settings.exportTime': '显示时间',
     'settings.exportLocation': '显示位置',
@@ -147,6 +150,7 @@ export const locales = {
     'viewer.exporting': 'Exporting...',
     'viewer.jumpToEvent': 'Jump to Event',
     'viewer.clearInOut': 'Clear',
+    'viewer.hardBraking': 'Hard braking',
 
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: Play/Pause',
@@ -217,6 +221,8 @@ export const locales = {
     'settings.close': 'Close',
     'settings.playback': 'Playback',
     'settings.autoAdvance': 'Auto-play next clip',
+    'settings.autoSeekEvent': 'Jump to event when opening a clip',
+    'settings.sentryCameraFocus': 'Focus triggering camera for Sentry events',
     'settings.export': 'Export Options',
     'settings.exportTime': 'Show Time',
     'settings.exportLocation': 'Show Location',

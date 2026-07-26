@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import type { CamClip, CamFootage, SEIDataPoint } from '../../utils';
-import { extractFootageSEI } from '../../utils';
+import { detectHardBraking, extractFootageSEI } from '../../utils';
 
 type Params = {
   clip: CamClip;
@@ -150,5 +150,17 @@ export function useSeiTelemetry({
     [seiSeries],
   );
 
-  return { seiSeries, hasRealMetadata, currentSEI, buildDriveWindows };
+  // Hard-braking incident marks for the timeline (derived once per series)
+  const incidentMarks = useMemo(
+    () => detectHardBraking(seiSeries),
+    [seiSeries],
+  );
+
+  return {
+    seiSeries,
+    hasRealMetadata,
+    currentSEI,
+    buildDriveWindows,
+    incidentMarks,
+  };
 }

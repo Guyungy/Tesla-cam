@@ -203,8 +203,13 @@ export function Viewer({
   const eventSeconds = calcEventSeconds(clip, footage);
 
   // ── SEI telemetry (lazy extraction + playhead sample + drive windows) ──
-  const { seiSeries, hasRealMetadata, currentSEI, buildDriveWindows } =
-    useSeiTelemetry({ clip, footage, onFootageUpdate, clipPlayedSeconds });
+  const {
+    seiSeries,
+    hasRealMetadata,
+    currentSEI,
+    buildDriveWindows,
+    incidentMarks,
+  } = useSeiTelemetry({ clip, footage, onFootageUpdate, clipPlayedSeconds });
   const hasMetadata = hasRealMetadata;
 
   // ── Overlay ref for drawFrame (avoids stale closure) ──
@@ -302,14 +307,55 @@ export function Viewer({
   useEffect(() => {
     if (!seekTask) return;
     players.forEach((i) => {
-      if (i.current) i.current.currentTime = seekTask.seconds;
+      const video = i.current;
+      if (!video) return;
+      if (video.readyState >= 1) {
+        video.currentTime = seekTask.seconds;
+      } else {
+        // Not loaded yet (fresh mount / segment switch): setting currentTime
+        // now can be silently lost — apply it once metadata arrives.
+        const target = seekTask.seconds;
+        video.addEventListener(
+          'loadedmetadata',
+          () => {
+            video.currentTime = target;
+          },
+          { once: true },
+        );
+      }
     });
     setSeekTask(undefined);
   }, [players, seekTask, states]);
 
-  // ── View Type (restore the user's last-picked layout when available) ──
+  // ── Auto-seek: open event clips just before the recorded moment ──
+  // calcEventSeconds already includes the pre-roll (AEB −3s, others −5s).
+  useEffect(() => {
+    if (!appSettings.autoSeekEvent) return;
+    if (eventSeconds === undefined || eventSeconds <= 0) return;
+    seek(eventSeconds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Once per clip (Viewer remounts per clip via key)
+
+  // ── Sentry focus: the event.json `camera` field says which camera fired ──
+  // Mapping per community-documented TeslaCam values; unknown values fall
+  // back to the normal grid so a wrong guess can never hide footage.
+  const sentryCam = useMemo<CamName | undefined>(() => {
+    if (clip.type !== 'sentry') return undefined;
+    const map: Record<string, CamName> = {
+      '0': 'front',
+      '3': 'left',
+      '4': 'right',
+      '5': 'back',
+    };
+    const cam = map[clip.event?.camera ?? ''];
+    if (cam && footage.segments.some((s) => s[cam])) return cam;
+    return undefined;
+  }, [clip.type, clip.event?.camera, footage.segments]);
+
+  // ── View Type (sentry trigger camera > user preference > default) ──
   const defaultView: ViewType = hasPillarCams ? 'grid6' : 'grid4';
   const [viewType, setViewTypeState] = useState<ViewType>(() => {
+    if (appSettings.sentryCameraFocus && sentryCam) return sentryCam;
     const preferred = appSettings.preferredView;
     if (!preferred) return defaultView;
     // Pillar-cam layouts fall back gracefully when the clip lacks those cams
@@ -1162,6 +1208,8 @@ export function Viewer({
               exportIn={exportIn}
               exportOut={exportOut}
               speedData={seiSeries}
+              warnMarks={incidentMarks}
+              warnLabel={t('viewer.hardBraking')}
               onChange={seek}
             />
           </div>

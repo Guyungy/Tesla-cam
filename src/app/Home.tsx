@@ -59,6 +59,7 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
   itemsRef.current = items;
   const loadClipRef = useRef(loadClip);
   loadClipRef.current = loadClip;
+  const deletingRef = useRef(false);
 
   /** Select the clip `offset` positions away in sidebar order (newest first). */
   const selectRelativeClip = useCallback((offset: number) => {
@@ -75,7 +76,7 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
     if (next) loadClipRef.current(next);
   }, []);
 
-  // ── Keyboard: ↑/↓ navigate between clips ──
+  // ── Keyboard: ↑/↓ navigate clips; Delete = triage flow (delete + next) ──
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -87,6 +88,16 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
       } else if (event.code === 'ArrowDown') {
         event.preventDefault();
         selectRelativeClip(1);
+      } else if (event.code === 'Delete') {
+        // Confirmation still happens in the native dialog; deletion then
+        // auto-selects the next clip, so triage is a pure keyboard loop.
+        event.preventDefault();
+        const cur = clipRef.current;
+        if (!cur || deletingRef.current) return;
+        deletingRef.current = true;
+        deleteClipRef.current(cur)?.finally(() => {
+          deletingRef.current = false;
+        });
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -121,11 +132,15 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
       return result;
     }
 
+    const deletedIndex = items.indexOf(item);
     onDeleteClip(item);
 
+    // Select the clip that took the deleted one's place (i.e. the next one
+    // in sidebar order) — this is what makes keyboard triage flow.
     const remaining = items.filter((current) => current !== item);
     if (remaining.length > 0) {
-      const nextClip = remaining[0];
+      const nextClip =
+        remaining[Math.min(Math.max(deletedIndex, 0), remaining.length - 1)];
       await loadClip(nextClip);
     } else {
       setClip(undefined);
@@ -134,6 +149,9 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
     setToastMsg(t('toast.clipDeleted'));
     return result;
   };
+
+  const deleteClipRef = useRef(handleDeleteClip);
+  deleteClipRef.current = handleDeleteClip;
 
   return (
     <div className="bg-surface-base flex h-screen w-screen flex-col overflow-hidden text-gray-200">
