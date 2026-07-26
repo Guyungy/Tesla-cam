@@ -1,17 +1,19 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { Sidebar } from '../components/Sidebar';
-import { TslMark } from '../components/TslMark';
-import { Toast } from '../components/Toast';
 import { Viewer } from '../components';
+import { Dashboard } from '../components/Dashboard';
+import { Sidebar } from '../components/Sidebar';
 import { TitleBar } from '../components/TitleBar';
+import { Toast } from '../components/Toast';
+import { TslMark } from '../components/TslMark';
+import { useAppSettings } from '../components/useAppSettings';
+import { useI18n } from '../i18n';
 import {
   type CamClip,
   type CamFootage,
   genFootage,
   revokeFootage,
 } from '../utils';
-import { useI18n } from '../i18n';
 
 type Props = {
   items: CamClip[];
@@ -22,9 +24,13 @@ type Props = {
 
 export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
   const { t } = useI18n();
+  const { appSettings } = useAppSettings();
   const [clip, setClip] = useState<CamClip>();
   const [footage, setFootage] = useState<CamFootage>();
-  const [loadProgress, setLoadProgress] = useState<{ current: number; total: number }>();
+  const [loadProgress, setLoadProgress] = useState<{
+    current: number;
+    total: number;
+  }>();
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const waitForUiRelease = () =>
@@ -46,6 +52,53 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
     setFootage(res);
   };
 
+  // Keep latest values in refs so global handlers stay stable
+  const clipRef = useRef(clip);
+  clipRef.current = clip;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const loadClipRef = useRef(loadClip);
+  loadClipRef.current = loadClip;
+
+  /** Select the clip `offset` positions away in sidebar order (newest first). */
+  const selectRelativeClip = useCallback((offset: number) => {
+    const list = itemsRef.current;
+    if (list.length === 0) return;
+    const cur = clipRef.current;
+    if (!cur) {
+      loadClipRef.current(list[0]);
+      return;
+    }
+    const idx = list.indexOf(cur);
+    if (idx < 0) return;
+    const next = list[idx + offset];
+    if (next) loadClipRef.current(next);
+  }, []);
+
+  // ── Keyboard: ↑/↓ navigate between clips ──
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        return;
+      if (event.code === 'ArrowUp') {
+        event.preventDefault();
+        selectRelativeClip(-1);
+      } else if (event.code === 'ArrowDown') {
+        event.preventDefault();
+        selectRelativeClip(1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectRelativeClip]);
+
+  // ── Auto-advance to the next clip when the current one ends ──
+  const handleClipEnded = useCallback(() => {
+    if (!appSettings.autoAdvance) return;
+    selectRelativeClip(1);
+  }, [appSettings.autoAdvance, selectRelativeClip]);
+
   const handleDeleteClip = async (item: CamClip) => {
     if (!window.electronAPI?.trashFiles) return;
 
@@ -57,7 +110,10 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
       await waitForUiRelease();
     }
 
-    const result = await window.electronAPI.trashFiles(item.sourcePaths || [], item.name);
+    const result = await window.electronAPI.trashFiles(
+      item.sourcePaths || [],
+      item.name,
+    );
     if (!result.ok) {
       if (deletingActiveClip) {
         await loadClip(item);
@@ -104,6 +160,7 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
                     footage={footage}
                     onFootageUpdate={setFootage}
                     onDelete={handleDeleteClip}
+                    onClipEnded={handleClipEnded}
                   />
                 </div>
               </div>
@@ -123,7 +180,9 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
                     <div className="h-1 w-48 overflow-hidden rounded-full bg-white/10">
                       <div
                         className="bg-brand-primary h-full transition-all duration-200"
-                        style={{ width: `${(loadProgress.current / loadProgress.total) * 100}%` }}
+                        style={{
+                          width: `${(loadProgress.current / loadProgress.total) * 100}%`,
+                        }}
                       />
                     </div>
                   )}
@@ -131,30 +190,46 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
               </div>
             )
           ) : (
-            <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 text-neutral-600 select-none">
-              <div className="flex flex-col items-center gap-4">
-                <TslMark size="lg" />
-                <div className="flex flex-col items-center gap-2 text-center">
-                  <div className="text-xs font-semibold tracking-[0.45em] text-brand-primary/80 uppercase">
-                    TSL
-                  </div>
-                  <div className="text-lg font-light tracking-[0.25em] uppercase opacity-70">
-                    {t('home.selectClip')}
-                  </div>
-                  <div className="max-w-md text-sm text-neutral-500">
-                    Tesla cinema workspace for synchronized camera review and export.
+            <div className="relative flex flex-1 flex-col text-neutral-600 select-none">
+              <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6">
+                <div className="flex flex-col items-center gap-4">
+                  <TslMark size="lg" />
+                  <div className="flex flex-col items-center gap-2 text-center">
+                    <div className="text-brand-primary/80 text-xs font-semibold tracking-[0.45em] uppercase">
+                      TSL
+                    </div>
+                    <div className="text-lg font-light tracking-[0.25em] uppercase opacity-70">
+                      {t('home.selectClip')}
+                    </div>
+                    <div className="max-w-md text-sm text-neutral-500">
+                      Tesla cinema workspace for synchronized camera review and
+                      export.
+                    </div>
                   </div>
                 </div>
+                {lastFolder && items.length === 0 && (
+                  <button
+                    onClick={onOpenFolder}
+                    className="mt-2 flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] px-6 py-3 text-neutral-500 transition-colors hover:border-white/20 hover:bg-white/[0.05] hover:text-neutral-300"
+                  >
+                    <span className="text-xs tracking-wider uppercase">
+                      {t('sidebar.selectFolder')}
+                    </span>
+                    <span className="text-[10px] text-neutral-600">
+                      {lastFolder}
+                    </span>
+                  </button>
+                )}
               </div>
-              {lastFolder && items.length === 0 && (
-                <button
-                  onClick={onOpenFolder}
-                  className="mt-2 flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] px-6 py-3 text-neutral-500 transition-colors hover:border-white/20 hover:bg-white/[0.05] hover:text-neutral-300"
-                >
-                  <span className="text-xs uppercase tracking-wider">{t('sidebar.selectFolder')}</span>
-                  <span className="text-[10px] text-neutral-600">{lastFolder}</span>
-                </button>
-              )}
+              <div className="px-4 pt-2 pb-4">
+                <Dashboard
+                  data={null}
+                  hasMetadata={false}
+                  timeText="--"
+                  locationText="—"
+                  variant="bar"
+                />
+              </div>
             </div>
           )}
         </div>

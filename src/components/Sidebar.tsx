@@ -1,12 +1,13 @@
 import clsx from 'clsx';
 import dayjs from 'dayjs';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { FaSearch, FaFilter } from 'react-icons/fa';
-import { MdLocalMovies, MdSecurity, MdSdStorage } from 'react-icons/md';
+import { FaFilter, FaSearch } from 'react-icons/fa';
+import { MdLocalMovies, MdSdStorage, MdSecurity } from 'react-icons/md';
+
+import { useI18n } from '../i18n';
 import type { CamClip, ClipType } from '../utils';
 import { parseTime } from '../utils';
 import { Clip } from './Clip';
-import { useI18n } from '../i18n';
 
 type Props = {
   items: CamClip[];
@@ -16,6 +17,8 @@ type Props = {
 };
 
 type FilterType = ClipType | 'all';
+
+const SIDEBAR_WIDTH_KEY = 'tesla-cam-sidebar-width';
 
 type DateGroup = {
   label: string;
@@ -27,8 +30,16 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
   const [filter, setFilter] = useState<FilterType>('all');
   const [search, setSearch] = useState('');
 
-  // ── Resize Handle ──
-  const [sidebarWidth, setSidebarWidth] = useState(320);
+  // ── Resize Handle (width persisted across sessions) ──
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+      if (Number.isFinite(saved) && saved >= 240 && saved <= 600) return saved;
+    } catch {
+      /* ignore */
+    }
+    return 320;
+  });
   const isResizing = useRef(false);
 
   const handleResizeStart = useCallback((e: React.PointerEvent) => {
@@ -44,13 +55,21 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
     setSidebarWidth(newWidth);
   }, []);
 
-  const handleResizeEnd = useCallback((e: React.PointerEvent) => {
-    if (!isResizing.current) return;
-    isResizing.current = false;
-    e.currentTarget.releasePointerCapture(e.pointerId);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  }, []);
+  const handleResizeEnd = useCallback(
+    (e: React.PointerEvent) => {
+      if (!isResizing.current) return;
+      isResizing.current = false;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+      } catch {
+        /* ignore */
+      }
+    },
+    [sidebarWidth],
+  );
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -78,7 +97,10 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
     const yesterday = today.subtract(1, 'day');
     const dateFmt = t('format.dateGroup');
 
-    const groupMap = new Map<string, { label: string; clips: CamClip[]; sortKey: string }>();
+    const groupMap = new Map<
+      string,
+      { label: string; clips: CamClip[]; sortKey: string }
+    >();
 
     for (const clip of filteredItems) {
       const timeStr = parseTime(clip.name);
@@ -104,8 +126,24 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
     }
 
     // Sort groups by date descending (newest first)
-    return Array.from(groupMap.values()).sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+    return Array.from(groupMap.values()).sort((a, b) =>
+      b.sortKey.localeCompare(a.sortKey),
+    );
   }, [filteredItems, t]);
+
+  // Per-type counts for tab badges
+  const typeCounts = useMemo(() => {
+    const counts: Record<FilterType, number> = {
+      all: items.length,
+      recent: 0,
+      sentry: 0,
+      saved: 0,
+    };
+    for (const item of items) {
+      if (item.type) counts[item.type]++;
+    }
+    return counts;
+  }, [items]);
 
   const tabs = [
     { id: 'all', label: t('sidebar.all'), icon: MdSdStorage },
@@ -115,7 +153,10 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
   ] as const;
 
   return (
-    <div className="bg-surface-panel/50 relative flex flex-col border-r border-white/5 backdrop-blur-xl" style={{ width: sidebarWidth }}>
+    <div
+      className="bg-surface-panel/50 relative flex flex-col border-r border-white/5 backdrop-blur-xl"
+      style={{ width: sidebarWidth }}
+    >
       {/* Header Area */}
       <div className="flex flex-col gap-3 p-4 pb-2">
         <div className="relative">
@@ -143,6 +184,18 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
             >
               <tab.icon size={14} />
               {tab.label}
+              {typeCounts[tab.id] > 0 && (
+                <span
+                  className={clsx(
+                    'rounded-full px-1 text-[9px] leading-3 tabular-nums',
+                    filter === tab.id
+                      ? 'bg-brand-primary/15 text-brand-primary'
+                      : 'bg-white/10 text-neutral-500',
+                  )}
+                >
+                  {typeCounts[tab.id]}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -167,9 +220,11 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
           dateGroups.map((group) => (
             <div key={group.label} className="mb-2">
               {/* Date header */}
-              <div className="sticky top-0 z-10 bg-neutral-900/90 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-neutral-500 backdrop-blur-sm">
+              <div className="sticky top-0 z-10 bg-neutral-900/90 px-2 py-1.5 text-[10px] font-semibold tracking-widest text-neutral-500 uppercase backdrop-blur-sm">
                 {group.label}
-                <span className="ml-2 text-neutral-600">{group.clips.length}</span>
+                <span className="ml-2 text-neutral-600">
+                  {group.clips.length}
+                </span>
               </div>
               <div className="flex flex-col gap-1">
                 {group.clips.map((item, i) => (
@@ -188,7 +243,10 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
 
       {/* Footer Info */}
       <div className="border-t border-white/5 p-2 text-center text-[10px] text-neutral-600">
-        {t('sidebar.clipCount', { total: items.length, shown: filteredItems.length })}
+        {t('sidebar.clipCount', {
+          total: items.length,
+          shown: filteredItems.length,
+        })}
       </div>
 
       {/* Resize handle */}

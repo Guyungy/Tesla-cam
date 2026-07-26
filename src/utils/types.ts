@@ -21,14 +21,20 @@ export type CamClipEvent = {
 };
 
 /** All 6 Tesla camera positions (4 original + 2 B-pillar) */
-export type CamName = 'front' | 'back' | 'left' | 'right' | 'left_pillar' | 'right_pillar';
+export type CamName =
+  | 'front'
+  | 'back'
+  | 'left'
+  | 'right'
+  | 'left_pillar'
+  | 'right_pillar';
 
 /** Layout modes for the viewer */
 export type ViewType =
-  | 'grid6'       // 6-camera grid (3x2): all cameras
-  | 'grid4'       // 4-camera grid (2x2): front, back, left, right (new layout)
-  | 'grid4old'    // 4-camera grid (legacy): front top-wide, 3 bottom
-  | 'front'       // Single camera fullscreen
+  | 'grid6' // 6-camera grid (3x2): all cameras
+  | 'grid4' // 4-camera grid (2x2): front, back, left, right (new layout)
+  | 'grid4old' // 4-camera grid (legacy): front top-wide, 3 bottom
+  | 'front' // Single camera fullscreen
   | 'back'
   | 'left'
   | 'right'

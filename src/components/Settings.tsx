@@ -1,7 +1,9 @@
-import { VscClose } from 'react-icons/vsc';
-import { useI18n } from '../i18n';
-import type { Locale } from '../i18n';
 import clsx from 'clsx';
+import { VscClose } from 'react-icons/vsc';
+
+import type { Locale } from '../i18n';
+import { useI18n } from '../i18n';
+import { useAppSettings } from './useAppSettings';
 import { useExportSettings } from './useExportSettings';
 
 type Props = {
@@ -17,6 +19,7 @@ const LANGUAGE_OPTIONS: { id: Locale; label: string; flag: string }[] = [
 export function Settings({ open, onClose }: Props) {
   const { locale, setLocale, t } = useI18n();
   const { exportSettings, setExportSettings } = useExportSettings();
+  const { appSettings, setAppSettings } = useAppSettings();
 
   if (!open) return null;
 
@@ -30,7 +33,9 @@ export function Settings({ open, onClose }: Props) {
     <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="bg-surface-panel w-80 rounded-xl border border-white/10 p-6 shadow-2xl">
         <div className="mb-6 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-white">{t('settings.title')}</h3>
+          <h3 className="text-lg font-bold text-white">
+            {t('settings.title')}
+          </h3>
           <button
             onClick={onClose}
             className="text-neutral-500 transition-colors hover:text-white"
@@ -67,6 +72,23 @@ export function Settings({ open, onClose }: Props) {
           {/* Divider */}
           <div className="border-t border-white/5" />
 
+          {/* Playback Options */}
+          <div>
+            <label className="mb-3 block text-sm font-medium text-neutral-400">
+              {t('settings.playback')}
+            </label>
+            <ToggleRow
+              label={t('settings.autoAdvance')}
+              checked={appSettings.autoAdvance}
+              onToggle={() =>
+                setAppSettings({ autoAdvance: !appSettings.autoAdvance })
+              }
+            />
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-white/5" />
+
           {/* Export Options */}
           <div>
             <label className="mb-3 block text-sm font-medium text-neutral-400">
@@ -74,33 +96,51 @@ export function Settings({ open, onClose }: Props) {
             </label>
             <div className="flex flex-col gap-2.5">
               {toggles.map(({ key, label }) => (
-                <label
+                <ToggleRow
                   key={key}
-                  className="flex cursor-pointer items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2.5 transition-colors hover:border-white/10"
-                >
-                  <span className="text-sm text-neutral-300">{label}</span>
-                  <button
-                    role="switch"
-                    aria-checked={exportSettings[key]}
-                    onClick={() => setExportSettings({ [key]: !exportSettings[key] })}
-                    className={clsx(
-                      'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200',
-                      exportSettings[key] ? 'bg-brand-primary' : 'bg-white/15',
-                    )}
-                  >
-                    <span
-                      className={clsx(
-                        'inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform duration-200',
-                        exportSettings[key] ? 'translate-x-[18px]' : 'translate-x-[3px]',
-                      )}
-                    />
-                  </button>
-                </label>
+                  label={label}
+                  checked={exportSettings[key]}
+                  onToggle={() =>
+                    setExportSettings({ [key]: !exportSettings[key] })
+                  }
+                />
               ))}
             </div>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  checked,
+  onToggle,
+}: {
+  label: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2.5 transition-colors hover:border-white/10">
+      <span className="text-sm text-neutral-300">{label}</span>
+      <button
+        role="switch"
+        aria-checked={checked}
+        onClick={onToggle}
+        className={clsx(
+          'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200',
+          checked ? 'bg-brand-primary' : 'bg-white/15',
+        )}
+      >
+        <span
+          className={clsx(
+            'inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform duration-200',
+            checked ? 'translate-x-[18px]' : 'translate-x-[3px]',
+          )}
+        />
+      </button>
+    </label>
   );
 }

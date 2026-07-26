@@ -15,7 +15,10 @@ function detectProvider(lat: number, lon: number): MapProvider {
 }
 
 /** Generate a map URL for the given event location */
-export function genLocationUrl(event: CamClipEvent, provider?: MapProvider): string {
+export function genLocationUrl(
+  event: CamClipEvent,
+  provider?: MapProvider,
+): string {
   const lat = parseFloat(event.est_lat);
   const lon = parseFloat(event.est_lon);
 
@@ -42,13 +45,19 @@ export function genLocationUrl(event: CamClipEvent, provider?: MapProvider): str
 }
 
 /** Generate all available map links for display */
-export function genAllMapLinks(event: CamClipEvent): { label: string; url: string; provider: MapProvider }[] {
+export function genAllMapLinks(
+  event: CamClipEvent,
+): { label: string; url: string; provider: MapProvider }[] {
   const lat = parseFloat(event.est_lat);
   const lon = parseFloat(event.est_lon);
   if (isNaN(lat) || isNaN(lon)) return [];
 
   return [
-    { label: 'Google Maps', url: genLocationUrl(event, 'google'), provider: 'google' },
+    {
+      label: 'Google Maps',
+      url: genLocationUrl(event, 'google'),
+      provider: 'google',
+    },
     { label: '高德地图', url: genLocationUrl(event, 'amap'), provider: 'amap' },
   ];
 }

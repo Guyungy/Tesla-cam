@@ -112,7 +112,7 @@ export function Player({
       )}
 
       {label && (
-        <div className="pointer-events-none absolute top-1.5 left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-white/70">
+        <div className="pointer-events-none absolute top-1.5 left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium tracking-wider text-white/70 uppercase">
           {label}
         </div>
       )}

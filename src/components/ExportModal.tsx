@@ -1,4 +1,5 @@
 import { VscClose } from 'react-icons/vsc';
+
 import { useI18n } from '../i18n';
 
 type Props = {
@@ -10,7 +11,14 @@ type Props = {
   onCancel: () => void;
 };
 
-export function ExportModal({ open, progress, frameCount, eta, encoding, onCancel }: Props) {
+export function ExportModal({
+  open,
+  progress,
+  frameCount,
+  eta,
+  encoding,
+  onCancel,
+}: Props) {
   const { t } = useI18n();
   if (!open) return null;
 
@@ -38,16 +46,14 @@ export function ExportModal({ open, progress, frameCount, eta, encoding, onCance
         </div>
 
         <div className="flex items-center justify-between text-sm">
-          <span className="tabular-nums text-neutral-400">
+          <span className="text-neutral-400 tabular-nums">
             {encoding ? t('export.encoding') : `${Math.round(progress)}%`}
           </span>
           <div className="flex flex-col items-end gap-0.5 text-xs text-neutral-500">
             {frameCount !== undefined && frameCount > 0 && (
               <span>{t('export.frames', { count: frameCount })}</span>
             )}
-            {eta && !encoding && (
-              <span>{t('export.eta', { time: eta })}</span>
-            )}
+            {eta && !encoding && <span>{t('export.eta', { time: eta })}</span>}
           </div>
         </div>
 

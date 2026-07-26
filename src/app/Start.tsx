@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { type CamClip, genClips } from '../utils';
 import { useI18n } from '../i18n';
+import { type CamClip, genClips } from '../utils';
 
 type Props = {
   onChange?: (clips: CamClip[]) => void;

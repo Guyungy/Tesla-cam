@@ -1,13 +1,72 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
-import path from 'path';
+import {
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  spawn,
+} from 'child_process';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import fs from 'fs';
 import fsPromises from 'fs/promises';
-import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+import { prepareComposeExport } from './composeExport.js';
+import type {
+  ComposeExportRequest,
+  ComposeExportResult,
+} from './composeTypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
+
+/** Extract a human-readable message from an unknown thrown value. */
+function errMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+/**
+ * Validate a compose request coming over IPC. The renderer is trusted code,
+ * but with contextIsolation on we still refuse obviously bad input at the
+ * process boundary: every source path must be an absolute path to an existing
+ * .mp4 file, and numeric fields must be sane.
+ */
+function validateComposeRequest(req: ComposeExportRequest): string | null {
+  if (!req || typeof req !== 'object') return 'Invalid request';
+  if (
+    typeof req.sessionId !== 'string' ||
+    !/^[\w.-]{1,64}$/.test(req.sessionId)
+  ) {
+    return 'Invalid session id';
+  }
+  if (!Number.isFinite(req.durationSeconds) || req.durationSeconds <= 0) {
+    return 'Invalid duration';
+  }
+  if (req.durationSeconds > 3600) return 'Export duration too long';
+  if (!Number.isFinite(req.startSeconds) || req.startSeconds < 0) {
+    return 'Invalid start time';
+  }
+  if (!Array.isArray(req.segments) || req.segments.length === 0) {
+    return 'No segments';
+  }
+  for (const seg of req.segments) {
+    if (!seg || typeof seg !== 'object' || !seg.paths) return 'Invalid segment';
+    for (const p of Object.values(seg.paths)) {
+      if (p === undefined) continue;
+      if (typeof p !== 'string' || !path.isAbsolute(p))
+        return 'Invalid source path';
+      if (path.extname(p).toLowerCase() !== '.mp4')
+        return 'Invalid source path';
+      try {
+        if (!fs.statSync(p).isFile()) return 'Source file not found';
+      } catch {
+        return 'Source file not found';
+      }
+    }
+  }
+  return null;
+}
 
 type ExportSession = {
   outputPath: string;
@@ -20,11 +79,22 @@ type ExportSession = {
   completion: Promise<void>;
 };
 
+type ComposeSession = {
+  outputPath: string;
+  canceled: boolean;
+  process: ChildProcess;
+  durationSeconds: number;
+  fps: number;
+};
+
 if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
-app.commandLine.appendSwitch('remote-debugging-port', '9222');
+// Only enable remote debugging in development.
+if (!app.isPackaged) {
+  app.commandLine.appendSwitch('remote-debugging-port', '9222');
+}
 
 function getFFmpegPath(): string {
   const ffmpegStatic = require('ffmpeg-static') as string;
@@ -36,6 +106,7 @@ function getFFmpegPath(): string {
 
 // Track active export sessions
 const exportSessions = new Map<string, ExportSession>();
+const composeSessions = new Map<string, ComposeSession>();
 
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
@@ -54,8 +125,10 @@ const createWindow = () => {
     backgroundColor: '#0a0a0a',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: true,
+      // Security: renderer must not get Node integration.
+      nodeIntegration: false,
       contextIsolation: true,
+      sandbox: false, // need webUtils.getPathForFile in preload
     },
   });
 
@@ -79,7 +152,12 @@ app.on('ready', () => {
 
   ipcMain.on('window-maximize', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
-    win?.isMaximized() ? win.unmaximize() : win?.maximize();
+    if (!win) return;
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
   });
 
   ipcMain.on('window-close', (event) => {
@@ -96,11 +174,20 @@ app.on('ready', () => {
       const ext = path.extname(name).toLowerCase();
       let filters: Electron.FileFilter[];
       if (ext === '.csv') {
-        filters = [{ name: 'CSV', extensions: ['csv'] }, { name: 'All', extensions: ['*'] }];
+        filters = [
+          { name: 'CSV', extensions: ['csv'] },
+          { name: 'All', extensions: ['*'] },
+        ];
       } else if (ext === '.jpg' || ext === '.png') {
-        filters = [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }, { name: 'All', extensions: ['*'] }];
+        filters = [
+          { name: 'Images', extensions: ['jpg', 'jpeg', 'png'] },
+          { name: 'All', extensions: ['*'] },
+        ];
       } else {
-        filters = [{ name: 'Videos', extensions: ['mp4'] }, { name: 'All', extensions: ['*'] }];
+        filters = [
+          { name: 'Videos', extensions: ['mp4'] },
+          { name: 'All', extensions: ['*'] },
+        ];
       }
 
       const { canceled, filePath } = await dialog.showSaveDialog(win, {
@@ -120,7 +207,10 @@ app.on('ready', () => {
 
   ipcMain.handle(
     'trash-files',
-    async (event, { paths, clipName }: { paths: string[]; clipName: string }) => {
+    async (
+      event,
+      { paths, clipName }: { paths: string[]; clipName: string },
+    ) => {
       const win = BrowserWindow.fromWebContents(event.sender);
       if (!win) return { ok: false, error: 'No window' };
 
@@ -151,7 +241,8 @@ app.on('ready', () => {
           await shell.trashItem(filePath);
           trashedCount++;
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           errors.push(`${filePath}: ${message}`);
           console.warn(`[Delete] Skipped ${filePath}:`, error);
         }
@@ -161,17 +252,20 @@ app.on('ready', () => {
         return { ok: true, trashedCount };
       }
 
-      const { response: permanentDeleteResponse } = await dialog.showMessageBox(win, {
-        type: 'warning',
-        buttons: ['Delete Permanently', 'Cancel'],
-        defaultId: 1,
-        cancelId: 1,
-        title: 'Recycle Bin unavailable',
-        message: `Could not move "${clipName}" to the Recycle Bin.`,
-        detail:
-          'The files may still be locked, or this drive may not support the Recycle Bin.\n\n' +
-          'Do you want to permanently delete the clip instead?',
-      });
+      const { response: permanentDeleteResponse } = await dialog.showMessageBox(
+        win,
+        {
+          type: 'warning',
+          buttons: ['Delete Permanently', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Recycle Bin unavailable',
+          message: `Could not move "${clipName}" to the Recycle Bin.`,
+          detail:
+            'The files may still be locked, or this drive may not support the Recycle Bin.\n\n' +
+            'Do you want to permanently delete the clip instead?',
+        },
+      );
 
       if (permanentDeleteResponse !== 0) {
         return {
@@ -187,9 +281,13 @@ app.on('ready', () => {
           await fsPromises.rm(filePath, { recursive: true, force: true });
           deletedCount++;
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           errors.push(`${filePath}: ${message}`);
-          console.warn(`[Delete] Permanent delete failed for ${filePath}:`, error);
+          console.warn(
+            `[Delete] Permanent delete failed for ${filePath}:`,
+            error,
+          );
         }
       }
 
@@ -204,20 +302,171 @@ app.on('ready', () => {
     },
   );
 
-  // ── FFmpeg Video Export (stream raw RGBA frames to FFmpeg) ──
+  // ── Fast compose export (source files → filter_complex → H.264) ──
 
-  /**
-   * Start export: show save dialog and spawn FFmpeg process that accepts raw RGBA frames on stdin.
-   */
+  ipcMain.handle(
+    'export-compose',
+    async (event, req: ComposeExportRequest): Promise<ComposeExportResult> => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return { ok: false, error: 'No window' };
+
+      const invalid = validateComposeRequest(req);
+      if (invalid) return { ok: false, error: invalid };
+
+      const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        defaultPath: req.fileName,
+        filters: [
+          { name: 'MP4 Video', extensions: ['mp4'] },
+          { name: 'All', extensions: ['*'] },
+        ],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+
+      let prepared;
+      try {
+        prepared = prepareComposeExport(req, filePath);
+      } catch (e) {
+        return { ok: false, error: errMsg(e) || 'Failed to prepare export' };
+      }
+
+      const ffmpegPath = getFFmpegPath();
+      console.log(`[ComposeExport] ${ffmpegPath} ${prepared.args.join(' ')}`);
+
+      const ffmpeg = spawn(ffmpegPath, prepared.args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+
+      let stderr = '';
+      ffmpeg.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+        if (stderr.length > 8000) stderr = stderr.slice(-8000);
+      });
+
+      // Parse -progress pipe:1 for out_time_ms (misleadingly named: microseconds)
+      let lastOutMs = 0;
+      ffmpeg.stdout?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        for (const line of text.split(/\r?\n/)) {
+          if (line.startsWith('out_time_ms=')) {
+            const ms = Number(line.slice('out_time_ms='.length));
+            if (Number.isFinite(ms)) lastOutMs = ms;
+          }
+        }
+        const pct = Math.min(
+          99,
+          (lastOutMs / 1e6 / Math.max(req.durationSeconds, 0.001)) * 100,
+        );
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('export-compose-progress', {
+            sessionId: req.sessionId,
+            progress: pct,
+            outTimeSec: lastOutMs / 1e6,
+          });
+        }
+      });
+
+      composeSessions.set(req.sessionId, {
+        outputPath: filePath,
+        canceled: false,
+        process: ffmpeg,
+        durationSeconds: req.durationSeconds,
+        fps: prepared.fps,
+      });
+
+      const cleanupTmp = async () => {
+        if (prepared.tmpDir) {
+          try {
+            await fsPromises.rm(prepared.tmpDir, {
+              recursive: true,
+              force: true,
+            });
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+
+      try {
+        const code = await new Promise<number | null>((resolve, reject) => {
+          ffmpeg.on('error', reject);
+          ffmpeg.on('close', (c) => resolve(c));
+        });
+
+        const session = composeSessions.get(req.sessionId);
+        composeSessions.delete(req.sessionId);
+
+        if (session?.canceled) {
+          try {
+            await fsPromises.rm(filePath, { force: true });
+          } catch {
+            /* ignore */
+          }
+          return { ok: false, canceled: true };
+        }
+
+        if (code !== 0) {
+          return {
+            ok: false,
+            error: stderr || `FFmpeg exited with code ${code}`,
+          };
+        }
+
+        const stat = await fsPromises.stat(filePath);
+        if (stat.size < 1000) {
+          return { ok: false, error: 'Output file too small' };
+        }
+
+        return {
+          ok: true,
+          filePath,
+          width: prepared.width,
+          height: prepared.height,
+          fps: prepared.fps,
+        };
+      } catch (e) {
+        composeSessions.delete(req.sessionId);
+        return { ok: false, error: errMsg(e) };
+      } finally {
+        await cleanupTmp();
+      }
+    },
+  );
+
+  ipcMain.on(
+    'export-compose-cancel',
+    (_event, { sessionId }: { sessionId: string }) => {
+      const session = composeSessions.get(sessionId);
+      if (!session) return;
+      session.canceled = true;
+      try {
+        if (!session.process.killed) session.process.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+    },
+  );
+
+  // ── Legacy FFmpeg Video Export (stream raw RGBA frames) ──
+
   ipcMain.handle(
     'export-start',
-    async (event, { sessionId, fileName, width, height, fps }: {
-      sessionId: string;
-      fileName: string;
-      width: number;
-      height: number;
-      fps: number;
-    }) => {
+    async (
+      event,
+      {
+        sessionId,
+        fileName,
+        width,
+        height,
+        fps,
+      }: {
+        sessionId: string;
+        fileName: string;
+        width: number;
+        height: number;
+        fps: number;
+      },
+    ) => {
       const win = BrowserWindow.fromWebContents(event.sender);
       if (!win) return { ok: false, error: 'No window' };
 
@@ -228,7 +477,7 @@ app.on('ready', () => {
           { name: 'All', extensions: ['*'] },
         ],
       });
-      if (canceled || !filePath) return { ok: false, error: 'canceled' };
+      if (canceled || !filePath) return { ok: false, canceled: true };
 
       // Ensure even dimensions for H.264
       const w = width % 2 === 0 ? width : width + 1;
@@ -236,18 +485,29 @@ app.on('ready', () => {
       const ffmpegPath = getFFmpegPath();
       const args = [
         '-y',
-        '-f', 'rawvideo',
-        '-pix_fmt', 'rgba',
-        '-s:v', `${w}x${h}`,
-        '-r', String(fps),
-        '-i', 'pipe:0',
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'rgba',
+        '-s:v',
+        `${w}x${h}`,
+        '-r',
+        String(fps),
+        '-i',
+        'pipe:0',
         '-an',
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '18',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        '-threads', '0',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '18',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        '-threads',
+        '0',
         filePath,
       ];
 
@@ -290,17 +550,19 @@ app.on('ready', () => {
         completion,
       });
 
-      console.log(`[Export] Session ${sessionId}: ${w}x${h} @ ${fps}fps → ${filePath}`);
+      console.log(
+        `[Export] Session ${sessionId}: ${w}x${h} @ ${fps}fps → ${filePath}`,
+      );
       return { ok: true, filePath };
     },
   );
 
-  /**
-   * Write a single raw RGBA frame into FFmpeg stdin.
-   */
   ipcMain.handle(
     'export-frame',
-    async (_event, { sessionId, frameData }: { sessionId: string; frameData: Uint8Array }) => {
+    async (
+      _event,
+      { sessionId, frameData }: { sessionId: string; frameData: Uint8Array },
+    ) => {
       const session = exportSessions.get(sessionId);
       if (!session || session.canceled) return { ok: false };
 
@@ -347,16 +609,13 @@ app.on('ready', () => {
         });
         session.frameCount++;
         return { ok: true, frameNum };
-      } catch (e: any) {
-        console.error(`[Export] Failed to write frame ${frameNum}:`, e.message);
-        return { ok: false, error: e.message };
+      } catch (e) {
+        console.error(`[Export] Failed to write frame ${frameNum}:`, errMsg(e));
+        return { ok: false, error: errMsg(e) };
       }
     },
   );
 
-  /**
-   * Finish: close FFmpeg stdin, wait for encoding to complete, then verify output.
-   */
   ipcMain.handle(
     'export-finish',
     async (_event, { sessionId }: { sessionId: string }) => {
@@ -374,42 +633,50 @@ app.on('ready', () => {
       }
 
       try {
-        console.log(`[Export] Finalizing ${session.frameCount} streamed frames with FFmpeg...`);
+        console.log(
+          `[Export] Finalizing ${session.frameCount} streamed frames with FFmpeg...`,
+        );
         session.process.stdin.end();
         await session.completion;
 
-        // Verify output file exists and has content
         const stat = await fsPromises.stat(session.outputPath);
         console.log(`[Export] Output file: ${stat.size} bytes`);
 
         if (stat.size < 1000) {
           await cleanupSession(sessionId);
-          return { ok: false, error: 'Output file too small', frameCount: session.frameCount };
+          return {
+            ok: false,
+            error: 'Output file too small',
+            frameCount: session.frameCount,
+          };
         }
 
         await cleanupSession(sessionId);
-        return { ok: true, filePath: session.outputPath, frameCount: session.frameCount };
-      } catch (e: any) {
-        console.error('[Export] FFmpeg encoding failed:', e.message);
+        return {
+          ok: true,
+          filePath: session.outputPath,
+          frameCount: session.frameCount,
+        };
+      } catch (e) {
+        console.error('[Export] FFmpeg encoding failed:', errMsg(e));
         await cleanupSession(sessionId);
-        return { ok: false, error: e.message, frameCount: session.frameCount };
+        return { ok: false, error: errMsg(e), frameCount: session.frameCount };
       }
     },
   );
 
-  /**
-   * Cancel export.
-   */
-  ipcMain.on('export-cancel', async (_event, { sessionId }: { sessionId: string }) => {
-    const session = exportSessions.get(sessionId);
-    if (session) {
-      session.canceled = true;
-      await cleanupSession(sessionId);
-    }
-  });
+  ipcMain.on(
+    'export-cancel',
+    async (_event, { sessionId }: { sessionId: string }) => {
+      const session = exportSessions.get(sessionId);
+      if (session) {
+        session.canceled = true;
+        await cleanupSession(sessionId);
+      }
+    },
+  );
 });
 
-/** Remove temp directory and session record */
 async function cleanupSession(sessionId: string) {
   const session = exportSessions.get(sessionId);
   if (!session) return;
@@ -418,15 +685,23 @@ async function cleanupSession(sessionId: string) {
     if (!session.process.killed) {
       session.process.kill('SIGKILL');
     }
-  } catch (e: any) {
-    console.warn(`[Export] Cleanup failed:`, e.message);
+  } catch (e) {
+    console.warn(`[Export] Cleanup failed:`, errMsg(e));
   }
 }
 
 app.on('window-all-closed', () => {
-  // Clean up all temp dirs
   for (const [id] of exportSessions) {
     cleanupSession(id);
+  }
+  for (const [id, session] of composeSessions) {
+    session.canceled = true;
+    try {
+      if (!session.process.killed) session.process.kill('SIGKILL');
+    } catch {
+      /* ignore */
+    }
+    composeSessions.delete(id);
   }
   if (process.platform !== 'darwin') {
     app.quit();

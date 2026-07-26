@@ -1,10 +1,10 @@
 import clsx from 'clsx';
 import dayjs from 'dayjs';
 
+import { useI18n } from '../i18n';
 import { type CamClip, parseTime } from '../utils';
 import { ClipType } from './ClipType';
 import { Thumb } from './Thumb';
-import { useI18n } from '../i18n';
 
 type Props = {
   item: CamClip;
@@ -16,7 +16,8 @@ export function Clip({ item, active, onClick }: Props) {
   const { t } = useI18n();
   const time = dayjs(parseTime(item.name));
   const location = item.event
-    ? [item.event.city, item.event.street].filter(Boolean).join(' ') || t('sidebar.unknownLocation')
+    ? [item.event.city, item.event.street].filter(Boolean).join(' ') ||
+      t('sidebar.unknownLocation')
     : t('sidebar.unknownLocation');
 
   return (
@@ -42,9 +43,7 @@ export function Clip({ item, active, onClick }: Props) {
           </span>
           <ClipType clip={item} />
         </div>
-        <span className="truncate text-xs text-neutral-500">
-          {location}
-        </span>
+        <span className="truncate text-xs text-neutral-500">{location}</span>
         {item.event?.reason && (
           <span className="truncate text-[10px] text-neutral-600 italic">
             {item.event.reason}
