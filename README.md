@@ -54,8 +54,15 @@ Hover over the timeline to see a speed-over-time sparkline rendered in the progr
 - Filter by type: **All / Recent / Sentry / Saved** — with live clip-count badges
 - Search by date, location, or event reason
 - Clips grouped by date: **Today / Yesterday / 2025-04-03...**
+- **Real video thumbnails** — poster frames lazily extracted from the front camera as you scroll
 - Event reason displayed on clip cards (e.g., "object detected")
 - Sidebar width is resizable and remembered across sessions
+
+### GPS Track Panel
+
+A compact live track panel overlays the video: the clip's full driving path
+with a playhead marker that moves as you scrub. Pure SVG rendered from SEI
+GPS samples — fully offline, no map tiles. Collapsible with one click.
 
 ### Playback & Navigation
 
@@ -71,9 +78,10 @@ Hover over the timeline to see a speed-over-time sparkline rendered in the progr
 Export the current view (any layout) as an H.264 MP4 video powered by FFmpeg:
 
 - **Fast path**: source files → `filter_complex` compose (multi-cam grid + overlays) — no canvas frame pipe
+- **Hardware encoding**: NVENC / QuickSync / AMF auto-detected (toggle in Settings), with automatic libx264 fallback if the GPU encode fails
 - **Fallback**: canvas RGBA stream when disk paths are unavailable
 - Set **IN / OUT** points for precise clip trimming (visible as blue range on timeline)
-- Overlay: **live-updating timestamp clock**, location, and time-windowed drive data (speed / gear / AP) sampled from real SEI telemetry
+- Overlay: **live-updating timestamp clock**, location, and time-windowed drive data (speed / gear / AP) sampled from real SEI telemetry — localized camera labels
 - Unicode-safe overlay text (CJK, apostrophes, `%`) via drawtext textfiles
 - Compose export supports up to **10 minutes**; legacy canvas path capped at 60s
 - Export modal shows progress and estimated remaining time

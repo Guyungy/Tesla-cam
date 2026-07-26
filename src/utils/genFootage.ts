@@ -114,16 +114,37 @@ export async function genFootage(
   return { segments, duration, urls };
 }
 
+/** Extract one segment's SEI on a dedicated worker (off the main thread). */
+function extractSegmentSEIViaWorker(
+  worker: Worker,
+  file: File,
+  startSeconds: number,
+  duration: number,
+  id: number,
+): Promise<SEIDataPoint[]> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (
+      e: MessageEvent<{ id: number; points?: SEIDataPoint[]; error?: string }>,
+    ) => {
+      if (e.data.id !== id) return;
+      worker.removeEventListener('message', onMessage);
+      if (e.data.error) reject(new Error(e.data.error));
+      else resolve(e.data.points ?? []);
+    };
+    worker.addEventListener('message', onMessage);
+    worker.postMessage({ id, file, startSeconds, duration });
+  });
+}
+
 /**
  * Extract SEI metadata from front camera files asynchronously.
+ * Runs in Web Workers so multi-GB scans never block the UI thread;
+ * falls back to in-thread parsing when workers are unavailable.
  */
 export async function extractFootageSEI(
   files: File[],
   footage: CamFootage,
 ): Promise<SEIDataPoint[] | undefined> {
-  const { extractSEIFromFile, convertToDataPoints } =
-    await import('./parseSEI');
-
   const frontFiles: Record<string, File> = {};
   for (const file of files) {
     const name = file.name.slice(0, 19);
@@ -142,22 +163,64 @@ export async function extractFootageSEI(
       (j): j is { seg: (typeof footage.segments)[0]; file: File } => !!j.file,
     );
 
-  await mapPool(frontJobs, 2, async ({ seg, file }) => {
-    try {
-      const rawMessages = await extractSEIFromFile(file);
-      if (rawMessages.length > 0) {
-        const points = convertToDataPoints(
-          rawMessages,
-          seg.startSeconds,
-          seg.duration,
-        );
-        allDataPoints.push(...points);
-      }
-    } catch (e) {
-      console.warn(`SEI extraction failed for segment ${seg.name}:`, e);
+  const WORKERS = 2;
+  let workers: Worker[] = [];
+  try {
+    workers = Array.from(
+      { length: Math.min(WORKERS, frontJobs.length || 1) },
+      () =>
+        new Worker(new URL('./seiWorker.ts', import.meta.url), {
+          type: 'module',
+        }),
+    );
+  } catch {
+    workers = [];
+  }
+
+  try {
+    if (workers.length > 0) {
+      let jobId = 0;
+      await mapPool(frontJobs, workers.length, async ({ seg, file }, index) => {
+        const worker = workers[index % workers.length];
+        try {
+          const points = await extractSegmentSEIViaWorker(
+            worker,
+            file,
+            seg.startSeconds,
+            seg.duration,
+            jobId++,
+          );
+          allDataPoints.push(...points);
+        } catch (e) {
+          console.warn(`SEI extraction failed for segment ${seg.name}:`, e);
+        }
+        return null;
+      });
+    } else {
+      // Fallback: parse on the main thread
+      const { extractSEIFromFile, convertToDataPoints } =
+        await import('./parseSEI');
+      await mapPool(frontJobs, 2, async ({ seg, file }) => {
+        try {
+          const rawMessages = await extractSEIFromFile(file);
+          if (rawMessages.length > 0) {
+            allDataPoints.push(
+              ...convertToDataPoints(
+                rawMessages,
+                seg.startSeconds,
+                seg.duration,
+              ),
+            );
+          }
+        } catch (e) {
+          console.warn(`SEI extraction failed for segment ${seg.name}:`, e);
+        }
+        return null;
+      });
     }
-    return null;
-  });
+  } finally {
+    workers.forEach((w) => w.terminate());
+  }
 
   allDataPoints.sort((a, b) => a.offsetSeconds - b.offsetSeconds);
   return allDataPoints.length > 0 ? allDataPoints : undefined;

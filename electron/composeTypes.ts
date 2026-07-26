@@ -53,6 +53,8 @@ export type ComposeExportRequest = {
   overlay?: ComposeOverlay;
   labels?: Partial<Record<CamName, string>>;
   fps?: number;
+  /** Use a hardware H.264 encoder when one is detected (default true). */
+  useHardware?: boolean;
 };
 
 export type ComposeExportResult = {
@@ -64,6 +66,8 @@ export type ComposeExportResult = {
   width?: number;
   height?: number;
   fps?: number;
+  /** Encoder actually used, e.g. 'libx264' or 'h264_nvenc'. */
+  encoder?: string;
 };
 
 export type ComposeProgressEvent = {

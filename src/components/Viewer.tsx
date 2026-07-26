@@ -17,13 +17,11 @@ import {
   type CamClip,
   type CamFootage,
   type CamName,
-  extractFootageSEI,
   formatDuration,
   genAllMapLinks,
   parseTime,
   type PlayerState,
   type SeekInfo,
-  type SEIDataPoint,
   type ViewType,
 } from '../utils';
 import { Dashboard } from './Dashboard';
@@ -33,8 +31,11 @@ import { Player } from './Player';
 import { Progress } from './Progress';
 import { Rate } from './Rate';
 import { Toast } from './Toast';
+import { TrackMap } from './TrackMap';
 import { useAppSettings } from './useAppSettings';
 import { useExportSettings } from './useExportSettings';
+import { useSeiTelemetry } from './viewer/useSeiTelemetry';
+import { useVideoExport } from './viewer/useVideoExport';
 
 type Props = {
   clip: CamClip;
@@ -48,9 +49,6 @@ type Props = {
   onClipEnded?: () => void;
 };
 
-/** Canvas RGBA pipe is heavy — keep a cap. Compose export (source files) can go longer. */
-const MAX_EXPORT_SECONDS = 60;
-const MAX_COMPOSE_EXPORT_SECONDS = 600;
 const SINGLE_EXPORT_MAX_WIDTH = 3840;
 const TESLA_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M40 2L10 2C9.445 2 9 2.449 9 3L9 47C9 47.551 9.445 48 10 48L40 48C40.555 48 41 47.551 41 47L41 3C41 2.449 40.555 2 40 2ZM23.137 10.094C24.375 10.063 25.625 10.063 26.867 10.094C30.074 10.176 33.285 10.515 36.309 11.539L35.633 12.531C33.074 11.633 30.035 11.199 26.828 11.105C25.617 11.066 24.383 11.066 23.172 11.105C19.965 11.199 16.93 11.633 14.367 12.531L13.695 11.539C16.719 10.515 19.926 10.176 23.137 10.094ZM17.086 37.078C17.02 37.359 16.793 37.594 16.484 37.715L15.547 37.715L15.492 37.738L15.492 40.27L14.906 40.27L14.906 37.738L14.859 37.715L13.922 37.715C13.613 37.594 13.387 37.359 13.32 37.078L13.32 37.074L17.086 37.074ZM21.34 40.266L19.113 40.266C18.801 40.141 18.57 39.906 18.508 39.625L21.941 39.625C21.879 39.906 21.652 40.141 21.34 40.266ZM21.34 38.965L19.113 38.965C18.801 38.844 18.57 38.605 18.508 38.328L21.941 38.328C21.879 38.605 21.652 38.844 21.34 38.965ZM21.34 37.727L19.113 37.727C18.801 37.602 18.57 37.367 18.508 37.086L21.941 37.086C21.879 37.367 21.652 37.602 21.34 37.727ZM26.867 40.27L23.617 40.27L23.629 40.246C23.691 39.965 23.918 39.75 24.223 39.625L26.289 39.625L26.289 38.965L23.617 38.965L23.617 37.078L26.852 37.078C26.785 37.359 26.559 37.609 26.25 37.703L24.191 37.703L24.191 38.336L26.867 38.336ZM31.16 40.246L28.523 40.238L28.523 37.078L29.102 37.074L29.098 39.617L31.668 39.617C31.605 39.883 31.449 40.113 31.16 40.246ZM28.453 13.633L25 32.164L21.547 13.633C19.699 13.633 17.781 13.918 17.73 15.277C16.863 15.059 15.281 14.074 14.918 13.383C17.555 12.316 21.902 12.176 23.789 12.246L25 13.8L26.211 12.246C28.098 12.176 32.449 12.316 35.086 13.383C34.719 14.074 33.137 15.059 32.266 15.277C32.219 13.918 30.297 13.633 28.453 13.633ZM36.602 40.258L36.027 40.258L36.027 38.969L33.934 38.969L33.934 40.258L33.355 40.258L33.355 38.32L36.602 38.324ZM36.086 37.711L33.859 37.711C33.547 37.586 33.305 37.363 33.246 37.082L36.68 37.082C36.617 37.363 36.398 37.586 36.086 37.711Z" fill="white"/></svg>`;
 const TESLA_ICON_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(TESLA_ICON_SVG)}`;
@@ -69,17 +67,6 @@ const ALL_CAMS: CamName[] = [
 function errText(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
-}
-
-function resolveCamFromFileName(fileName: string): CamName | undefined {
-  const restName = fileName.slice(20);
-  if (restName.startsWith('front')) return 'front';
-  if (restName.startsWith('back')) return 'back';
-  if (restName.startsWith('left_repeater')) return 'left';
-  if (restName.startsWith('right_repeater')) return 'right';
-  if (restName.startsWith('left_pillar')) return 'left_pillar';
-  if (restName.startsWith('right_pillar')) return 'right_pillar';
-  return undefined;
 }
 
 /** Display labels for camera names (UI) */
@@ -215,88 +202,10 @@ export function Viewer({
   const clipPlayedSeconds = segment.startSeconds + segmentPlayedSeconds;
   const eventSeconds = calcEventSeconds(clip, footage);
 
-  // ── Lazy SEI Metadata Extraction ──
-  const seiLoadingRef = useRef(false);
-  useEffect(() => {
-    if (footage.seiData) return; // Already loaded
-    if (seiLoadingRef.current) return; // Already in progress
-    seiLoadingRef.current = true;
-
-    let cancelled = false;
-    console.log(
-      '[SEI] Starting metadata extraction for',
-      clip.videos.length,
-      'video files...',
-    );
-    extractFootageSEI(clip.videos, footage)
-      .then((seiData) => {
-        if (cancelled) return;
-        seiLoadingRef.current = false;
-        if (seiData) {
-          console.log('[SEI] Found', seiData.length, 'data points');
-          if (onFootageUpdate) {
-            onFootageUpdate({ ...footage, seiData });
-          }
-        } else {
-          console.log(
-            '[SEI] No metadata found (video may be from firmware < 2025.44.25)',
-          );
-        }
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        seiLoadingRef.current = false;
-        console.warn('[SEI] Extraction failed:', e);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip.name]); // Only run once per clip
-
-  // ── SEI Metadata (real only — never invent speed/gear with demo curves) ──
-  const seiSeries = useMemo<SEIDataPoint[]>(
-    () =>
-      footage.seiData && footage.seiData.length > 0 ? footage.seiData : [],
-    [footage.seiData],
-  );
-  const hasRealMetadata = seiSeries.length > 0;
+  // ── SEI telemetry (lazy extraction + playhead sample + drive windows) ──
+  const { seiSeries, hasRealMetadata, currentSEI, buildDriveWindows } =
+    useSeiTelemetry({ clip, footage, onFootageUpdate, clipPlayedSeconds });
   const hasMetadata = hasRealMetadata;
-
-  const currentSEI: SEIDataPoint | null = useMemo(() => {
-    if (seiSeries.length === 0) return null;
-    // Nearest sample at/before playhead; if playhead is before first sample, use first.
-    // Do not hold the last driving sample across a long parked gap with no SEI:
-    // if gap since last sample > 2s, clear motion metrics (parked / no metadata).
-    const target = clipPlayedSeconds;
-    const data = seiSeries;
-    let lo = 0;
-    let hi = data.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (data[mid].offsetSeconds <= target) lo = mid;
-      else hi = mid - 1;
-    }
-    const sample = data[lo];
-    if (!sample) return null;
-    if (sample.offsetSeconds > target) {
-      // playhead before any sample
-      return target + 0.5 < sample.offsetSeconds ? null : sample;
-    }
-    const age = target - sample.offsetSeconds;
-    if (age > 2.0) {
-      // Stale: keep GPS/gear context but force stopped speed/pedals when sample is old
-      return {
-        ...sample,
-        offsetSeconds: target,
-        speedKph: sample.gear === 'P' || age > 5 ? 0 : sample.speedKph,
-        throttlePct: age > 5 ? 0 : sample.throttlePct,
-        brakePct: age > 5 ? 0 : sample.brakePct,
-      };
-    }
-    return sample;
-  }, [seiSeries, clipPlayedSeconds]);
 
   // ── Overlay ref for drawFrame (avoids stale closure) ──
   const overlayRef = useRef({
@@ -456,138 +365,9 @@ export function Viewer({
     });
   }, [muted, players, segmentIndex, viewType]);
 
-  // ── Export Logic ──
-  const [exporting, setExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState(0);
-  const [exportFrameCount, setExportFrameCount] = useState(0);
-  const [exportEta, setExportEta] = useState<string>();
-  const [exportEncoding, setExportEncoding] = useState(false);
-  const [exportIn, setExportIn] = useState<number>();
-  const [exportOut, setExportOut] = useState<number>();
-  const isCancelingRef = useRef(false);
-  const activeExportSessionRef = useRef<string | null>(null);
+  // ── UI feedback state (export state itself lives in useVideoExport) ──
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  const exportSelectionSeconds = useMemo(() => {
-    if (exportIn === undefined || exportOut === undefined) return 0;
-    if (exportOut <= exportIn) return 0;
-    return Math.min(exportOut - exportIn, footage.duration);
-  }, [exportIn, exportOut, footage.duration]);
-
-  const markExportIn = useCallback(() => {
-    setExportIn(Math.min(clipPlayedSeconds, footage.duration));
-  }, [clipPlayedSeconds, footage.duration]);
-
-  const markExportOut = useCallback(() => {
-    setExportOut(Math.min(clipPlayedSeconds, footage.duration));
-  }, [clipPlayedSeconds, footage.duration]);
-
-  // ── Keyboard Shortcuts (must be after markExportIn/Out) ──
-  const handleKeyboardControl = useCallback(
-    (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
-        return;
-
-      switch (event.code) {
-        case 'Space':
-          event.preventDefault();
-          setPlaying((p) => !p);
-          break;
-        case 'ArrowLeft':
-          event.preventDefault();
-          jump(event.shiftKey ? -1 : -5);
-          break;
-        case 'ArrowRight':
-          event.preventDefault();
-          jump(event.shiftKey ? 1 : 5);
-          break;
-        case 'Comma':
-          // Frame step back — pauses playback for precise scrubbing
-          event.preventDefault();
-          stepFrame(-1);
-          break;
-        case 'Period':
-          // Frame step forward
-          event.preventDefault();
-          stepFrame(1);
-          break;
-        case 'KeyF':
-          event.preventDefault();
-          if (document.fullscreenElement) {
-            document.exitFullscreen();
-          } else {
-            document.documentElement.requestFullscreen?.();
-          }
-          break;
-        case 'KeyP':
-          event.preventDefault();
-          togglePiP();
-          break;
-        case 'KeyI':
-          event.preventDefault();
-          markExportIn();
-          break;
-        case 'KeyO':
-          event.preventDefault();
-          markExportOut();
-          break;
-        case 'KeyM':
-          event.preventDefault();
-          setMuted((m) => !m);
-          break;
-      }
-    },
-    [jump, stepFrame, togglePiP, markExportIn, markExportOut],
-  );
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyboardControl);
-    return () => window.removeEventListener('keydown', handleKeyboardControl);
-  }, [handleKeyboardControl]);
-
-  const formatExportPoint = useCallback(
-    (seconds?: number) =>
-      seconds === undefined
-        ? '--:--'
-        : dayjs('1970-01-01T00:00:00')
-            .add(seconds, 'second')
-            .format('HH:mm:ss'),
-    [],
-  );
-
-  const canUseComposeExport = useMemo(() => {
-    if (!window.electronAPI?.exportCompose) return false;
-    if (clip.videos.length === 0) return false;
-    // Compose reads source files from disk directly, so EVERY video must
-    // resolve to a real path — otherwise fall back to the canvas pipeline
-    // instead of silently exporting black cells for unresolvable cameras.
-    return clip.videos.every((f) => {
-      try {
-        return !!window.electronAPI?.getPathForFile(f);
-      } catch {
-        return false;
-      }
-    });
-  }, [clip.videos]);
-
-  const maxExportSeconds = canUseComposeExport
-    ? MAX_COMPOSE_EXPORT_SECONDS
-    : MAX_EXPORT_SECONDS;
-
-  const exportableSeconds = useMemo(() => {
-    if (exportSelectionSeconds > 0)
-      return Math.min(maxExportSeconds, exportSelectionSeconds);
-    return Math.min(
-      maxExportSeconds,
-      Math.max(0, footage.duration - clipPlayedSeconds),
-    );
-  }, [
-    clipPlayedSeconds,
-    exportSelectionSeconds,
-    footage.duration,
-    maxExportSeconds,
-  ]);
 
   // ── drawFrame (supports all layouts) ──
   const drawFrame = useCallback(
@@ -946,6 +726,125 @@ export function Viewer({
     }
   }, [viewType, refMap, visibleCams]);
 
+  // ── Video Export (compose fast path + canvas fallback) ──
+  const setOverlayTimeLocation = useCallback(
+    (time: string, location: string) => {
+      overlayRef.current = { ...overlayRef.current, time, location };
+    },
+    [],
+  );
+
+  const localizedCamLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        ALL_CAMS.map((cam) => [cam, t(CAM_I18N_KEYS[cam])]),
+      ) as Record<CamName, string>,
+    [t],
+  );
+
+  const {
+    exporting,
+    exportProgress,
+    exportFrameCount,
+    exportEta,
+    exportEncoding,
+    exportIn,
+    exportOut,
+    setExportIn,
+    setExportOut,
+    markExportIn,
+    markExportOut,
+    formatExportPoint,
+    exportableSeconds,
+    exportCurrentView,
+    cancelExport,
+  } = useVideoExport({
+    clip,
+    footage,
+    viewType,
+    players,
+    clipPlayedSeconds,
+    playbackRate,
+    setPlaying,
+    setPlaybackRate,
+    segmentIndexRef,
+    setSegmentIndex,
+    drawFrame,
+    resolveCanvasSize,
+    setOverlayTimeLocation,
+    locationText,
+    formatTime,
+    timestampFmt,
+    camLabels: localizedCamLabels,
+    buildDriveWindows,
+    exportSettings,
+    t,
+    setToastMsg,
+  });
+
+  // ── Keyboard Shortcuts ──
+  const handleKeyboardControl = useCallback(
+    (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        return;
+
+      switch (event.code) {
+        case 'Space':
+          event.preventDefault();
+          setPlaying((p) => !p);
+          break;
+        case 'ArrowLeft':
+          event.preventDefault();
+          jump(event.shiftKey ? -1 : -5);
+          break;
+        case 'ArrowRight':
+          event.preventDefault();
+          jump(event.shiftKey ? 1 : 5);
+          break;
+        case 'Comma':
+          // Frame step back — pauses playback for precise scrubbing
+          event.preventDefault();
+          stepFrame(-1);
+          break;
+        case 'Period':
+          // Frame step forward
+          event.preventDefault();
+          stepFrame(1);
+          break;
+        case 'KeyF':
+          event.preventDefault();
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else {
+            document.documentElement.requestFullscreen?.();
+          }
+          break;
+        case 'KeyP':
+          event.preventDefault();
+          togglePiP();
+          break;
+        case 'KeyI':
+          event.preventDefault();
+          markExportIn();
+          break;
+        case 'KeyO':
+          event.preventDefault();
+          markExportOut();
+          break;
+        case 'KeyM':
+          event.preventDefault();
+          setMuted((m) => !m);
+          break;
+      }
+    },
+    [jump, stepFrame, togglePiP, markExportIn, markExportOut],
+  );
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyboardControl);
+    return () => window.removeEventListener('keydown', handleKeyboardControl);
+  }, [handleKeyboardControl]);
+
   // ── Screenshots ──
   const exportScreenshot = useCallback(async () => {
     try {
@@ -984,14 +883,6 @@ export function Viewer({
       setToastMsg(t('toast.screenshotFailed', { error: errText(error) }));
     }
   }, [clip.name, drawFrame, resolveCanvasSize, viewType, t]);
-
-  const cancelExport = useCallback(() => {
-    isCancelingRef.current = true;
-    const sessionId = activeExportSessionRef.current;
-    if (!sessionId) return;
-    window.electronAPI?.exportComposeCancel?.(sessionId);
-    window.electronAPI?.exportCancel?.(sessionId);
-  }, []);
 
   const deleteClip = useCallback(async () => {
     if (!onDelete || deleting || exporting) return;
@@ -1051,452 +942,6 @@ export function Viewer({
       setToastMsg(t('toast.csvFailed', { error: errText(e) }));
     }
   }, [clip.name, footage.seiData, t]);
-
-  /** Wait for a video element to have renderable frame data after seeking */
-  const waitForVideoReady = (
-    video: HTMLVideoElement,
-    timeoutMs = 5000,
-  ): Promise<void> => {
-    return new Promise((resolve) => {
-      if (video.readyState >= 2) {
-        resolve();
-        return;
-      }
-      const timer = setTimeout(resolve, timeoutMs);
-      const onReady = () => {
-        clearTimeout(timer);
-        video.removeEventListener('canplay', onReady);
-        video.removeEventListener('seeked', onReady);
-        resolve();
-      };
-      video.addEventListener('canplay', onReady);
-      video.addEventListener('seeked', onReady);
-    });
-  };
-
-  /** Read raw RGBA bytes from canvas for fast FFmpeg piping */
-  const canvasToRgbaBytes = (
-    ctx: CanvasRenderingContext2D,
-    width: number,
-    height: number,
-  ): Uint8Array => {
-    const imageData = ctx.getImageData(0, 0, width, height);
-    return new Uint8Array(imageData.data.buffer.slice(0));
-  };
-
-  const waitForLayoutCommit = useCallback(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
-    [],
-  );
-
-  const seekExportFrame = useCallback(
-    async (clipSeconds: number) => {
-      const seekInfo = calcSeekInfo(footage, clipSeconds);
-      if (!seekInfo) throw new Error('Could not resolve export frame position');
-
-      if (segmentIndexRef.current !== seekInfo.index) {
-        setSegmentIndex(seekInfo.index);
-        await waitForLayoutCommit();
-      }
-
-      const activeVideos: HTMLVideoElement[] = [];
-      for (const player of players) {
-        if (player.current && player.current.src) {
-          player.current.pause();
-          player.current.playbackRate = 1;
-          player.current.currentTime = seekInfo.seconds;
-          activeVideos.push(player.current);
-        }
-      }
-
-      await Promise.all(activeVideos.map((video) => waitForVideoReady(video)));
-      return seekInfo;
-    },
-    [footage, players, waitForLayoutCommit],
-  );
-
-  /** Resolve absolute disk paths for each segment/camera from clip.videos */
-  const buildComposeSegments = useCallback(() => {
-    const pathByName: Record<string, string> = {};
-    for (const file of clip.videos) {
-      try {
-        const p = window.electronAPI?.getPathForFile(file);
-        if (p) pathByName[file.name] = p;
-      } catch {
-        /* ignore */
-      }
-    }
-
-    return footage.segments.map((seg) => {
-      const paths: Record<string, string | undefined> = {};
-      for (const cam of ALL_CAMS) {
-        // File name pattern: YYYY-MM-DD_HH-MM-SS-{cam}.mp4
-        const match = clip.videos.find(
-          (f) =>
-            f.name.startsWith(seg.name) &&
-            resolveCamFromFileName(f.name) === cam,
-        );
-        if (match && pathByName[match.name]) {
-          paths[cam] = pathByName[match.name];
-        }
-      }
-      return {
-        name: seg.name,
-        startSeconds: seg.startSeconds,
-        duration: seg.duration,
-        paths,
-      };
-    });
-  }, [clip.videos, footage.segments]);
-
-  /**
-   * Pre-sample SEI telemetry into merged text windows for the compose overlay.
-   * Times are relative to export start. Consecutive identical texts merge;
-   * step widens for long exports so the window count stays bounded.
-   */
-  const buildDriveWindows = useCallback(
-    (rangeStart: number, rangeDuration: number) => {
-      if (seiSeries.length === 0) return [];
-      const MAX_WINDOWS = 240;
-      const step = Math.max(1, rangeDuration / MAX_WINDOWS);
-      const windows: { start: number; end: number; text: string }[] = [];
-
-      const sampleAt = (target: number): SEIDataPoint | null => {
-        let lo = 0;
-        let hi = seiSeries.length - 1;
-        while (lo < hi) {
-          const mid = (lo + hi + 1) >> 1;
-          if (seiSeries[mid].offsetSeconds <= target) lo = mid;
-          else hi = mid - 1;
-        }
-        const s = seiSeries[lo];
-        if (!s) return null;
-        // Same staleness rule as the live dashboard: don't show old samples
-        if (s.offsetSeconds > target + 0.5 || target - s.offsetSeconds > 2)
-          return null;
-        return s;
-      };
-
-      for (let t0 = 0; t0 < rangeDuration; t0 += step) {
-        const sample = sampleAt(rangeStart + t0);
-        if (!sample) continue;
-        const text = `${Math.round(sample.speedKph)} km/h  ${sample.gear}  ${sample.apStatus}`;
-        const end = Math.min(t0 + step, rangeDuration);
-        const prev = windows[windows.length - 1];
-        if (prev && prev.text === text && Math.abs(prev.end - t0) < 0.01) {
-          prev.end = end;
-        } else {
-          windows.push({ start: t0, end, text });
-        }
-      }
-      return windows;
-    },
-    [seiSeries],
-  );
-
-  // ── Video Export: prefer compose (source files), fall back to canvas RGBA ──
-  const exportCurrentView = useCallback(async () => {
-    if (exporting) return;
-    if (exportableSeconds <= 0) {
-      setToastMsg(t('toast.noContent'));
-      return;
-    }
-
-    const exportStartSeconds =
-      exportSelectionSeconds > 0 && exportIn !== undefined
-        ? exportIn
-        : clipPlayedSeconds;
-
-    const sessionId = `export-${Date.now()}`;
-    activeExportSessionRef.current = sessionId;
-    const prevPlaybackRate = playbackRate;
-    const fileName = `${clip.name}-${viewType}.mp4`;
-
-    // ── Fast path: FFmpeg filter_complex from source files ──
-    if (window.electronAPI?.exportCompose && canUseComposeExport) {
-      setPlaying(false);
-      setPlaybackRate(1);
-      setExporting(true);
-      setExportProgress(0);
-      setExportFrameCount(0);
-      setExportEta(undefined);
-      setExportEncoding(true);
-      isCancelingRef.current = false;
-
-      const startMark = performance.now();
-      const unsub = window.electronAPI.onExportComposeProgress?.((data) => {
-        if (data.sessionId !== sessionId) return;
-        setExportProgress(data.progress);
-        setExportFrameCount(Math.round(data.outTimeSec * 30));
-        if (data.progress > 2 && data.outTimeSec > 0.5) {
-          const rate =
-            data.outTimeSec / ((performance.now() - startMark) / 1000);
-          if (rate > 0.01) {
-            const etaSec = (exportableSeconds - data.outTimeSec) / rate;
-            if (etaSec > 60) {
-              setExportEta(
-                `${Math.floor(etaSec / 60)}m ${Math.round(etaSec % 60)}s`,
-              );
-            } else {
-              setExportEta(`${Math.round(Math.max(0, etaSec))}s`);
-            }
-          }
-        }
-      });
-
-      try {
-        // Export-start wall-clock moment: static label as fallback, unix
-        // epoch for a live-updating drawtext clock in the output video.
-        const exportStartMoment = (() => {
-          const info = calcSeekInfo(footage, exportStartSeconds);
-          if (!info) return null;
-          return dayjs(parseTime(footage.segments[info.index].name)).add(
-            info.seconds,
-            'second',
-          );
-        })();
-
-        const result = await window.electronAPI.exportCompose({
-          sessionId,
-          fileName,
-          viewType,
-          startSeconds: exportStartSeconds,
-          durationSeconds: exportableSeconds,
-          segments: buildComposeSegments(),
-          labels: CAM_LABELS,
-          overlay: {
-            showTime: exportSettings.showTime,
-            showLocation: exportSettings.showLocation,
-            showDriveData: exportSettings.showDriveData,
-            locationText,
-            baseTimestampLabel:
-              exportStartMoment?.format(timestampFmt) ?? formatTime,
-            baseTimestampEpoch: exportStartMoment?.unix(),
-            driveWindows: exportSettings.showDriveData
-              ? buildDriveWindows(exportStartSeconds, exportableSeconds)
-              : undefined,
-          },
-          fps: 30,
-        });
-
-        unsub?.();
-        activeExportSessionRef.current = null;
-        setExporting(false);
-        setExportProgress(0);
-        setExportEncoding(false);
-        setPlaybackRate(prevPlaybackRate);
-
-        if (isCancelingRef.current || result.canceled) {
-          return;
-        }
-        if (result.ok && result.filePath) {
-          setToastMsg(t('toast.videoSaved'));
-          window.electronAPI.showItemInFolder(result.filePath);
-        } else {
-          console.error('Compose export failed:', result.error);
-          setToastMsg(
-            t('toast.exportFailedStart', { error: result.error || 'unknown' }),
-          );
-        }
-      } catch (e) {
-        unsub?.();
-        activeExportSessionRef.current = null;
-        setExporting(false);
-        setExportEncoding(false);
-        setPlaybackRate(prevPlaybackRate);
-        setToastMsg(t('toast.exportError', { error: errText(e) }));
-      }
-      return;
-    }
-
-    // ── Legacy path: canvas RGBA pipe ──
-    if (!window.electronAPI?.exportStart) {
-      setToastMsg(t('toast.exportFailed'));
-      return;
-    }
-
-    try {
-      setPlaying(false);
-      setPlaybackRate(1);
-      await waitForLayoutCommit();
-      const initialSeekInfo = await seekExportFrame(exportStartSeconds);
-
-      const { width, height, videoHeight } = resolveCanvasSize();
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Failed to create canvas context');
-
-      const exportTime = dayjs(
-        parseTime(footage.segments[initialSeekInfo.index].name),
-      )
-        .add(initialSeekInfo.seconds, 'second')
-        .format(timestampFmt);
-      overlayRef.current = {
-        ...overlayRef.current,
-        time: exportTime,
-        location: locationText,
-      };
-
-      const fps = 30;
-
-      const startResult = await window.electronAPI.exportStart({
-        sessionId,
-        fileName,
-        width,
-        height,
-        fps,
-      });
-      if (!startResult.ok) {
-        setPlaybackRate(prevPlaybackRate);
-        if (!startResult.canceled) {
-          setToastMsg(
-            t('toast.exportFailedStart', {
-              error: startResult.error || 'unknown',
-            }),
-          );
-        }
-        return;
-      }
-
-      setExporting(true);
-      setExportProgress(0);
-      setExportFrameCount(0);
-      setExportEta(undefined);
-      setExportEncoding(false);
-      isCancelingRef.current = false;
-
-      const frameDuration = 1 / fps;
-      const totalFrames = Math.ceil(exportableSeconds * fps);
-
-      const startRealTime = performance.now();
-      let frameIndex = 0;
-      let lastUiUpdate = 0;
-
-      const captureLoop = async () => {
-        while (frameIndex < totalFrames) {
-          if (isCancelingRef.current) {
-            window.electronAPI!.exportCancel(sessionId);
-            setExporting(false);
-            setExportProgress(0);
-            setPlaying(false);
-            setPlaybackRate(prevPlaybackRate);
-            return;
-          }
-
-          const realElapsed = (performance.now() - startRealTime) / 1000;
-          const now = performance.now();
-          if (
-            frameIndex === 0 ||
-            frameIndex === totalFrames - 1 ||
-            now - lastUiUpdate >= 120
-          ) {
-            const pct = Math.min(99, (frameIndex / totalFrames) * 100);
-            setExportProgress(pct);
-            setExportFrameCount(frameIndex);
-
-            if (frameIndex > 5 && realElapsed > 0) {
-              const framesPerSec = frameIndex / realElapsed;
-              const remaining = (totalFrames - frameIndex) / framesPerSec;
-              if (remaining > 60) {
-                setExportEta(
-                  `${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`,
-                );
-              } else {
-                setExportEta(`${Math.round(remaining)}s`);
-              }
-            }
-            lastUiUpdate = now;
-          }
-
-          const virtualElapsed = frameIndex * frameDuration;
-          const targetClipSeconds = Math.min(
-            exportStartSeconds + virtualElapsed,
-            footage.duration,
-          );
-          const frameSeekInfo = await seekExportFrame(targetClipSeconds);
-          const overlayTime = dayjs(
-            parseTime(footage.segments[frameSeekInfo.index].name),
-          )
-            .add(frameSeekInfo.seconds, 'second')
-            .format(timestampFmt);
-          overlayRef.current = {
-            ...overlayRef.current,
-            time: overlayTime,
-            location: locationText,
-          };
-
-          drawFrame(ctx, width, height, viewType, videoHeight);
-          const frameBytes = canvasToRgbaBytes(ctx, width, height);
-          await window.electronAPI!.exportFrame(sessionId, frameBytes);
-
-          frameIndex++;
-
-          if (frameIndex % 6 === 0) {
-            await new Promise((r) => requestAnimationFrame(r));
-          }
-        }
-
-        setExportProgress(100);
-        setExportEta(undefined);
-        setExportEncoding(true);
-        const result = await window.electronAPI!.exportFinish(sessionId);
-
-        setPlaying(false);
-        setPlaybackRate(prevPlaybackRate);
-        setExporting(false);
-        setExportProgress(0);
-
-        if (result.ok && result.filePath) {
-          setToastMsg(t('toast.videoSaved'));
-          window.electronAPI!.showItemInFolder(result.filePath);
-        } else {
-          setToastMsg(t('toast.exportFailedEmpty'));
-          console.error('FFmpeg export failed:', result.error);
-        }
-      };
-
-      captureLoop().catch((err: unknown) => {
-        console.error('Export loop failed:', err);
-        window.electronAPI?.exportCancel(sessionId);
-        setExporting(false);
-        setPlaying(false);
-        setPlaybackRate(prevPlaybackRate);
-        setToastMsg(t('toast.exportError', { error: errText(err) }));
-      });
-    } catch (e) {
-      console.error('Export start failed', e);
-      setExporting(false);
-      setPlaybackRate(prevPlaybackRate);
-      setToastMsg(t('toast.exportFailedStart', { error: errText(e) }));
-    }
-  }, [
-    clip.name,
-    footage,
-    clipPlayedSeconds,
-    exportIn,
-    exportSelectionSeconds,
-    exportableSeconds,
-    exporting,
-    playbackRate,
-    drawFrame,
-    locationText,
-    resolveCanvasSize,
-    viewType,
-    t,
-    timestampFmt,
-    seekExportFrame,
-    waitForLayoutCommit,
-    canUseComposeExport,
-    buildComposeSegments,
-    buildDriveWindows,
-    exportSettings,
-    formatTime,
-  ]);
 
   // ── Map Links ──
   const mapLinks = useMemo(() => {
@@ -1611,6 +1056,9 @@ export function Viewer({
 
       {/* Main Stage */}
       <div className="relative flex-1 overflow-hidden rounded-xl bg-black shadow-2xl ring-1 ring-white/10">
+        {/* GPS track panel (renders only when the clip has GPS data) */}
+        <TrackMap data={seiSeries} playedSeconds={clipPlayedSeconds} />
+
         {/* Video Grid */}
         <div className={clsx('h-full w-full', gridClass)}>
           {viewType === 'grid6' && (

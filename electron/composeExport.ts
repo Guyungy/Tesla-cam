@@ -21,9 +21,58 @@ export type PreparedCompose = {
   width: number;
   height: number;
   fps: number;
+  /** Encoder selected for this run ('libx264' or a hardware encoder). */
+  encoder: string;
   /** Temp dir holding drawtext textfiles — caller removes it after ffmpeg exits. */
   tmpDir: string | null;
 };
+
+/**
+ * Encoder-specific output args, quality-matched around "visually great
+ * dashcam footage". Hardware encoders trade a little compression efficiency
+ * for a large wall-clock speedup.
+ */
+function encoderArgs(encoder: string): string[] {
+  switch (encoder) {
+    case 'h264_nvenc':
+      return [
+        '-c:v',
+        'h264_nvenc',
+        '-preset',
+        'p4',
+        '-rc',
+        'vbr',
+        '-cq',
+        '23',
+        '-b:v',
+        '0',
+      ];
+    case 'h264_qsv':
+      return [
+        '-c:v',
+        'h264_qsv',
+        '-preset',
+        'veryfast',
+        '-global_quality',
+        '23',
+      ];
+    case 'h264_amf':
+      return [
+        '-c:v',
+        'h264_amf',
+        '-quality',
+        'balanced',
+        '-rc',
+        'cqp',
+        '-qp_i',
+        '22',
+        '-qp_p',
+        '24',
+      ];
+    default:
+      return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18'];
+  }
+}
 
 type Piece = {
   path: string;
@@ -228,7 +277,9 @@ function layoutSize(viewType: ComposeViewType): {
 export function prepareComposeExport(
   req: ComposeExportRequest,
   outputPath: string,
+  opts: { encoder?: string } = {},
 ): PreparedCompose {
+  const encoder = opts.encoder || 'libx264';
   const fps = req.fps && req.fps > 0 ? req.fps : 30;
   const cams = camsForView(req.viewType);
   const { width, height, videoHeight } = layoutSize(req.viewType);
@@ -405,12 +456,7 @@ export function prepareComposeExport(
     '-map',
     '[vout]',
     '-an',
-    '-c:v',
-    'libx264',
-    '-preset',
-    'veryfast',
-    '-crf',
-    '18',
+    ...encoderArgs(encoder),
     '-pix_fmt',
     'yuv420p',
     '-movflags',
@@ -425,5 +471,5 @@ export function prepareComposeExport(
     outputPath,
   );
 
-  return { args, width, height, fps, tmpDir: textPool.tmpDir };
+  return { args, width, height, fps, encoder, tmpDir: textPool.tmpDir };
 }
