@@ -174,7 +174,14 @@ if (!app.isPackaged) {
  * returns undefined when missing so the export just omits the glyph.
  */
 function resolveOverlayIcon(): string | undefined {
-  const candidate = path.join(__dirname, '../dist/tesla-icon.png');
+  let candidate = path.join(__dirname, '../dist/tesla-icon.png');
+  // FFmpeg is a separate process and cannot read inside app.asar, while
+  // fs.statSync can — so the archived path looks valid here and then fails at
+  // encode time. The asset is unpacked (see build.asarUnpack) and resolved the
+  // same way as the ffmpeg binary itself.
+  if (candidate.includes('app.asar')) {
+    candidate = candidate.replace('app.asar', 'app.asar.unpacked');
+  }
   try {
     return fs.statSync(candidate).isFile() ? candidate : undefined;
   } catch {

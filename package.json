@@ -25,7 +25,8 @@
       "node_modules/ffmpeg-static/**/*"
     ],
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**/*"
+      "node_modules/ffmpeg-static/**/*",
+      "dist/tesla-icon.png"
     ],
     "directories": {
       "output": "release"

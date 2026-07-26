@@ -279,6 +279,44 @@ test('drive window text switches over time', () => {
     fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
 });
 
+test('an unreadable overlay icon is dropped, not handed to ffmpeg', () => {
+  // A packaged build resolved the icon inside app.asar: fs.statSync could read
+  // it, ffmpeg could not, and the entire export failed with
+  // "Error opening input file …app.asar\dist\tesla-icon.png".
+  const missing = path.join(tmpRoot, 'does-not-exist.png');
+  const prepared = prepareComposeExport(
+    makeRequest('front', { layout: testLayout('front') }),
+    path.join(tmpRoot, 'noicon.mp4'),
+    { iconPath: missing },
+  );
+
+  expect(prepared.args).not.toContain(missing);
+  expect(graphOf(prepared)).not.toContain('teslaicon');
+
+  // And it still encodes.
+  const r = spawnSync(ffmpeg, prepared.args, {
+    encoding: 'utf8',
+    maxBuffer: 1 << 24,
+  });
+  expect(r.status, (r.stderr || '').slice(-800)).toBe(0);
+  if (prepared.tmpDir)
+    fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
+});
+
+test('a real overlay icon is added as the last input', () => {
+  const icon = path.join(process.cwd(), 'public', 'tesla-icon.png');
+  const prepared = prepareComposeExport(
+    makeRequest('front', { layout: testLayout('front') }),
+    path.join(tmpRoot, 'icon.mp4'),
+    { iconPath: icon },
+  );
+  const inputs = prepared.args.filter((a) => a === '-i').length;
+  expect(prepared.args[prepared.args.lastIndexOf('-i') + 1]).toBe(icon);
+  expect(graphOf(prepared)).toContain(`[${inputs - 1}:v]scale=`);
+  if (prepared.tmpDir)
+    fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
+});
+
 test('a long export does not blow the command-line limit', () => {
   // One gated drawtext per second is ~240 chars. Past ~150 windows the
   // filtergraph exceeded Windows' 32767-char argv limit and ffmpeg never

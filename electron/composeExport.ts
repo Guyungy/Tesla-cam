@@ -330,6 +330,14 @@ export function prepareComposeExport(
   const gridCellW = evenDown(width / (req.viewType === 'grid4' ? 2 : 3));
   const gridCellH = evenDown(videoHeight / 2);
 
+  // The overlay glyph is decorative: if it cannot be read, drop it rather than
+  // handing FFmpeg an input that fails the whole encode. This bit an installed
+  // build, where the path resolved inside app.asar and only ffmpeg could tell.
+  const iconPath =
+    opts.iconPath && bar.iconSize > 0 && fs.existsSync(opts.iconPath)
+      ? opts.iconPath
+      : undefined;
+
   const inputPaths: string[] = [];
   const camGroups: { cam: CamName; pieces: Piece[]; inputOffset: number }[] =
     [];
@@ -467,7 +475,7 @@ export function prepareComposeExport(
   chain(`drawbox=x=0:y=${barY}:w=${width}:h=1:color=white@0.1:t=fill`);
 
   // Tesla mark on a faint red plate, vertically centred in the bar.
-  if (opts.iconPath && bar.iconSize > 0) {
+  if (iconPath) {
     const iconX = bar.hPad;
     const iconY = Math.round(barY + (barHeight - bar.iconSize) / 2);
     const plateX = iconX - Math.round(8 * bar.scale);
@@ -586,8 +594,8 @@ export function prepareComposeExport(
   for (const p of inputPaths) {
     args.push('-i', p);
   }
-  if (opts.iconPath && bar.iconSize > 0) {
-    args.push('-i', opts.iconPath);
+  if (iconPath) {
+    args.push('-i', iconPath);
   }
 
   // The graph goes in a file, not argv. Windows caps a command line at 32767

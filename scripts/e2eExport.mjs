@@ -39,11 +39,21 @@ const probe = (file) => {
   };
 };
 
-const app = await electron.launch({
-  args: ['.'],
-  cwd: process.cwd(),
-  env: { ...process.env, ELECTRON_RENDERER_URL: '' },
-});
+// E2E_EXE points at a packaged build — the only place asar path bugs surface.
+const EXE = process.env['E2E_EXE'];
+const app = await electron.launch(
+  EXE
+    ? {
+        executablePath: EXE,
+        env: { ...process.env, ELECTRON_RENDERER_URL: '' },
+      }
+    : {
+        args: ['.'],
+        cwd: process.cwd(),
+        env: { ...process.env, ELECTRON_RENDERER_URL: '' },
+      },
+);
+console.log(EXE ? `launched packaged build: ${EXE}` : 'launched from source');
 
 // Make both save paths non-interactive. No require() in here — a throw would
 // surface as a silent rejection inside the IPC handler.
