@@ -91,9 +91,54 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
-// Only enable remote debugging in development.
+// ── File logging: mirror console output to userData/logs/main.log ──
+// Keeps a diagnosable trail for packaged builds where stdout is invisible.
+function setupFileLogging() {
+  try {
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, 'main.log');
+    try {
+      // Simple rotation: start fresh once the log passes 1MB
+      if (fs.statSync(logFile).size > 1024 * 1024) fs.rmSync(logFile);
+    } catch {
+      /* no log yet */
+    }
+    const write = (level: string, args: unknown[]) => {
+      try {
+        const line = args
+          .map((a) => (a instanceof Error ? (a.stack ?? a.message) : String(a)))
+          .join(' ');
+        fs.appendFileSync(
+          logFile,
+          `[${new Date().toISOString()}] [${level}] ${line}\n`,
+        );
+      } catch {
+        /* disk full / permission — never crash on logging */
+      }
+    };
+    for (const level of ['log', 'warn', 'error'] as const) {
+      const original = console[level].bind(console);
+      console[level] = (...args: unknown[]) => {
+        original(...args);
+        write(level, args);
+      };
+    }
+  } catch {
+    /* logging is best-effort */
+  }
+}
+setupFileLogging();
+
+// Remote debugging: always on in development; in packaged builds only when
+// explicitly requested via env var (used by automated packaged-app checks).
 if (!app.isPackaged) {
   app.commandLine.appendSwitch('remote-debugging-port', '9222');
+} else if (/^\d{4,5}$/.test(process.env['TESLA_CAM_DEBUG_PORT'] ?? '')) {
+  app.commandLine.appendSwitch(
+    'remote-debugging-port',
+    process.env['TESLA_CAM_DEBUG_PORT'] as string,
+  );
 }
 
 function getFFmpegPath(): string {
@@ -102,6 +147,63 @@ function getFFmpegPath(): string {
     return ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
   }
   return ffmpegStatic;
+}
+
+// ── Hardware H.264 encoder detection (probed once, cached) ──
+// A listed encoder is not necessarily usable (driver/GPU dependent), so each
+// candidate is verified with a tiny real encode.
+let hwEncoderPromise: Promise<string | null> | null = null;
+
+function testEncoder(encoder: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const proc = spawn(
+      getFFmpegPath(),
+      [
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=black:s=320x240:d=0.2:r=10',
+        '-c:v',
+        encoder,
+        '-f',
+        'null',
+        '-',
+      ],
+      { stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true },
+    );
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      resolve(false);
+    }, 10000);
+    proc.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+  });
+}
+
+function detectHwEncoder(): Promise<string | null> {
+  if (!hwEncoderPromise) {
+    hwEncoderPromise = (async () => {
+      for (const encoder of ['h264_nvenc', 'h264_qsv', 'h264_amf']) {
+        if (await testEncoder(encoder)) {
+          console.log(`[ComposeExport] Hardware encoder available: ${encoder}`);
+          return encoder;
+        }
+      }
+      console.log('[ComposeExport] No hardware encoder — using libx264');
+      return null;
+    })();
+  }
+  return hwEncoderPromise;
 }
 
 // Track active export sessions
@@ -322,114 +424,136 @@ app.on('ready', () => {
       });
       if (canceled || !filePath) return { ok: false, canceled: true };
 
-      let prepared;
-      try {
-        prepared = prepareComposeExport(req, filePath);
-      } catch (e) {
-        return { ok: false, error: errMsg(e) || 'Failed to prepare export' };
-      }
-
       const ffmpegPath = getFFmpegPath();
-      console.log(`[ComposeExport] ${ffmpegPath} ${prepared.args.join(' ')}`);
 
-      const ffmpeg = spawn(ffmpegPath, prepared.args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      });
-
-      let stderr = '';
-      ffmpeg.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
-        if (stderr.length > 8000) stderr = stderr.slice(-8000);
-      });
-
-      // Parse -progress pipe:1 for out_time_ms (misleadingly named: microseconds)
-      let lastOutMs = 0;
-      ffmpeg.stdout?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
-        for (const line of text.split(/\r?\n/)) {
-          if (line.startsWith('out_time_ms=')) {
-            const ms = Number(line.slice('out_time_ms='.length));
-            if (Number.isFinite(ms)) lastOutMs = ms;
-          }
+      /** Run one encode attempt with the given encoder. */
+      const runAttempt = async (
+        encoder: string,
+      ): Promise<ComposeExportResult> => {
+        let prepared;
+        try {
+          prepared = prepareComposeExport(req, filePath, { encoder });
+        } catch (e) {
+          return { ok: false, error: errMsg(e) || 'Failed to prepare export' };
         }
-        const pct = Math.min(
-          99,
-          (lastOutMs / 1e6 / Math.max(req.durationSeconds, 0.001)) * 100,
+
+        console.log(
+          `[ComposeExport] (${encoder}) ${ffmpegPath} ${prepared.args.join(' ')}`,
         );
-        if (!event.sender.isDestroyed()) {
-          event.sender.send('export-compose-progress', {
-            sessionId: req.sessionId,
-            progress: pct,
-            outTimeSec: lastOutMs / 1e6,
-          });
-        }
-      });
 
-      composeSessions.set(req.sessionId, {
-        outputPath: filePath,
-        canceled: false,
-        process: ffmpeg,
-        durationSeconds: req.durationSeconds,
-        fps: prepared.fps,
-      });
+        const ffmpeg = spawn(ffmpegPath, prepared.args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        });
 
-      const cleanupTmp = async () => {
-        if (prepared.tmpDir) {
-          try {
-            await fsPromises.rm(prepared.tmpDir, {
-              recursive: true,
-              force: true,
+        let stderr = '';
+        ffmpeg.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString();
+          if (stderr.length > 8000) stderr = stderr.slice(-8000);
+        });
+
+        // Parse -progress pipe:1 for out_time_ms (misleadingly named: microseconds)
+        let lastOutMs = 0;
+        ffmpeg.stdout?.on('data', (chunk: Buffer) => {
+          const text = chunk.toString();
+          for (const line of text.split(/\r?\n/)) {
+            if (line.startsWith('out_time_ms=')) {
+              const ms = Number(line.slice('out_time_ms='.length));
+              if (Number.isFinite(ms)) lastOutMs = ms;
+            }
+          }
+          const pct = Math.min(
+            99,
+            (lastOutMs / 1e6 / Math.max(req.durationSeconds, 0.001)) * 100,
+          );
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('export-compose-progress', {
+              sessionId: req.sessionId,
+              progress: pct,
+              outTimeSec: lastOutMs / 1e6,
             });
-          } catch {
-            /* ignore */
+          }
+        });
+
+        composeSessions.set(req.sessionId, {
+          outputPath: filePath,
+          canceled: false,
+          process: ffmpeg,
+          durationSeconds: req.durationSeconds,
+          fps: prepared.fps,
+        });
+
+        try {
+          const code = await new Promise<number | null>((resolve, reject) => {
+            ffmpeg.on('error', reject);
+            ffmpeg.on('close', (c) => resolve(c));
+          });
+
+          const session = composeSessions.get(req.sessionId);
+          composeSessions.delete(req.sessionId);
+
+          if (session?.canceled) {
+            try {
+              await fsPromises.rm(filePath, { force: true });
+            } catch {
+              /* ignore */
+            }
+            return { ok: false, canceled: true };
+          }
+
+          if (code !== 0) {
+            return {
+              ok: false,
+              error: stderr || `FFmpeg exited with code ${code}`,
+            };
+          }
+
+          const stat = await fsPromises.stat(filePath);
+          if (stat.size < 1000) {
+            return { ok: false, error: 'Output file too small' };
+          }
+
+          return {
+            ok: true,
+            filePath,
+            width: prepared.width,
+            height: prepared.height,
+            fps: prepared.fps,
+            encoder: prepared.encoder,
+          };
+        } catch (e) {
+          composeSessions.delete(req.sessionId);
+          return { ok: false, error: errMsg(e) };
+        } finally {
+          if (prepared.tmpDir) {
+            try {
+              await fsPromises.rm(prepared.tmpDir, {
+                recursive: true,
+                force: true,
+              });
+            } catch {
+              /* ignore */
+            }
           }
         }
       };
 
-      try {
-        const code = await new Promise<number | null>((resolve, reject) => {
-          ffmpeg.on('error', reject);
-          ffmpeg.on('close', (c) => resolve(c));
-        });
+      const hwEncoder =
+        req.useHardware !== false ? await detectHwEncoder() : null;
 
-        const session = composeSessions.get(req.sessionId);
-        composeSessions.delete(req.sessionId);
+      let result = await runAttempt(hwEncoder ?? 'libx264');
 
-        if (session?.canceled) {
-          try {
-            await fsPromises.rm(filePath, { force: true });
-          } catch {
-            /* ignore */
-          }
-          return { ok: false, canceled: true };
-        }
-
-        if (code !== 0) {
-          return {
-            ok: false,
-            error: stderr || `FFmpeg exited with code ${code}`,
-          };
-        }
-
-        const stat = await fsPromises.stat(filePath);
-        if (stat.size < 1000) {
-          return { ok: false, error: 'Output file too small' };
-        }
-
-        return {
-          ok: true,
-          filePath,
-          width: prepared.width,
-          height: prepared.height,
-          fps: prepared.fps,
-        };
-      } catch (e) {
-        composeSessions.delete(req.sessionId);
-        return { ok: false, error: errMsg(e) };
-      } finally {
-        await cleanupTmp();
+      // The tiny probe can pass while a full-resolution encode fails
+      // (driver/GPU limits) — retry once on software before reporting failure.
+      if (!result.ok && !result.canceled && hwEncoder) {
+        console.warn(
+          `[ComposeExport] ${hwEncoder} failed, retrying with libx264:`,
+          result.error?.slice(-300),
+        );
+        result = await runAttempt('libx264');
       }
+
+      return result;
     },
   );
 

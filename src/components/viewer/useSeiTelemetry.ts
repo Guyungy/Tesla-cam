@@ -1,0 +1,154 @@
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+
+import type { CamClip, CamFootage, SEIDataPoint } from '../../utils';
+import { extractFootageSEI } from '../../utils';
+
+type Params = {
+  clip: CamClip;
+  footage: CamFootage;
+  /** Callback to update footage with SEI data once loaded */
+  onFootageUpdate?: (footage: CamFootage) => void;
+  /** Current playhead position in clip seconds */
+  clipPlayedSeconds: number;
+};
+
+/**
+ * SEI telemetry for a clip: lazy background extraction, the current sample
+ * at the playhead (with staleness handling), and pre-sampled drive-text
+ * windows for the compose export overlay.
+ */
+export function useSeiTelemetry({
+  clip,
+  footage,
+  onFootageUpdate,
+  clipPlayedSeconds,
+}: Params) {
+  // ── Lazy SEI metadata extraction (runs once per clip, off-thread) ──
+  const seiLoadingRef = useRef(false);
+  useEffect(() => {
+    if (footage.seiData) return; // Already loaded
+    if (seiLoadingRef.current) return; // Already in progress
+    seiLoadingRef.current = true;
+
+    let cancelled = false;
+    console.log(
+      '[SEI] Starting metadata extraction for',
+      clip.videos.length,
+      'video files...',
+    );
+    extractFootageSEI(clip.videos, footage)
+      .then((seiData) => {
+        if (cancelled) return;
+        seiLoadingRef.current = false;
+        if (seiData) {
+          console.log('[SEI] Found', seiData.length, 'data points');
+          if (onFootageUpdate) {
+            onFootageUpdate({ ...footage, seiData });
+          }
+        } else {
+          console.log(
+            '[SEI] No metadata found (video may be from firmware < 2025.44.25)',
+          );
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        seiLoadingRef.current = false;
+        console.warn('[SEI] Extraction failed:', e);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.name]); // Only run once per clip
+
+  // ── Series (real data only — never invent speed/gear) ──
+  const seiSeries = useMemo<SEIDataPoint[]>(
+    () =>
+      footage.seiData && footage.seiData.length > 0 ? footage.seiData : [],
+    [footage.seiData],
+  );
+  const hasRealMetadata = seiSeries.length > 0;
+
+  const currentSEI: SEIDataPoint | null = useMemo(() => {
+    if (seiSeries.length === 0) return null;
+    // Nearest sample at/before playhead; if playhead is before first sample,
+    // use first. Do not hold the last driving sample across a long parked
+    // gap: if the gap since the last sample > 2s, clear motion metrics.
+    const target = clipPlayedSeconds;
+    const data = seiSeries;
+    let lo = 0;
+    let hi = data.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (data[mid].offsetSeconds <= target) lo = mid;
+      else hi = mid - 1;
+    }
+    const sample = data[lo];
+    if (!sample) return null;
+    if (sample.offsetSeconds > target) {
+      // playhead before any sample
+      return target + 0.5 < sample.offsetSeconds ? null : sample;
+    }
+    const age = target - sample.offsetSeconds;
+    if (age > 2.0) {
+      // Stale: keep GPS/gear context but force stopped speed/pedals
+      return {
+        ...sample,
+        offsetSeconds: target,
+        speedKph: sample.gear === 'P' || age > 5 ? 0 : sample.speedKph,
+        throttlePct: age > 5 ? 0 : sample.throttlePct,
+        brakePct: age > 5 ? 0 : sample.brakePct,
+      };
+    }
+    return sample;
+  }, [seiSeries, clipPlayedSeconds]);
+
+  /**
+   * Pre-sample SEI telemetry into merged text windows for the compose
+   * overlay. Times are relative to export start. Consecutive identical texts
+   * merge; step widens for long exports so the window count stays bounded.
+   */
+  const buildDriveWindows = useCallback(
+    (rangeStart: number, rangeDuration: number) => {
+      if (seiSeries.length === 0) return [];
+      const MAX_WINDOWS = 240;
+      const step = Math.max(1, rangeDuration / MAX_WINDOWS);
+      const windows: { start: number; end: number; text: string }[] = [];
+
+      const sampleAt = (target: number): SEIDataPoint | null => {
+        let lo = 0;
+        let hi = seiSeries.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (seiSeries[mid].offsetSeconds <= target) lo = mid;
+          else hi = mid - 1;
+        }
+        const s = seiSeries[lo];
+        if (!s) return null;
+        // Same staleness rule as the live dashboard: don't show old samples
+        if (s.offsetSeconds > target + 0.5 || target - s.offsetSeconds > 2)
+          return null;
+        return s;
+      };
+
+      for (let t0 = 0; t0 < rangeDuration; t0 += step) {
+        const sample = sampleAt(rangeStart + t0);
+        if (!sample) continue;
+        const text = `${Math.round(sample.speedKph)} km/h  ${sample.gear}  ${sample.apStatus}`;
+        const end = Math.min(t0 + step, rangeDuration);
+        const prev = windows[windows.length - 1];
+        if (prev && prev.text === text && Math.abs(prev.end - t0) < 0.01) {
+          prev.end = end;
+        } else {
+          windows.push({ start: t0, end, text });
+        }
+      }
+      return windows;
+    },
+    [seiSeries],
+  );
+
+  return { seiSeries, hasRealMetadata, currentSEI, buildDriveWindows };
+}

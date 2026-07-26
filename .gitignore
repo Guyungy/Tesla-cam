@@ -35,3 +35,7 @@ venv/
 
 # Local agent workspace / debug artifacts
 .claude/
+
+# Test artifacts
+test-results/
+playwright-report/

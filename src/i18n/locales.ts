@@ -101,6 +101,7 @@ export const locales = {
     'settings.exportTime': '显示时间',
     'settings.exportLocation': '显示位置',
     'settings.exportDriveData': '显示驾驶数据',
+    'settings.exportHwAccel': '硬件加速编码（更快）',
 
     // Camera labels (export overlay)
     'cam.front': '前方',
@@ -220,6 +221,7 @@ export const locales = {
     'settings.exportTime': 'Show Time',
     'settings.exportLocation': 'Show Location',
     'settings.exportDriveData': 'Show Driving Data',
+    'settings.exportHwAccel': 'Hardware-accelerated encoding (faster)',
 
     // Camera labels (export overlay)
     'cam.front': 'Front',

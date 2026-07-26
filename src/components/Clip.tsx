@@ -23,16 +23,24 @@ export function Clip({ item, active, onClick }: Props) {
   return (
     <button
       className={clsx(
-        'group flex w-full gap-3 rounded-lg p-2 text-left transition-all',
+        // content-visibility keeps off-screen cards cheap in huge folders
+        'group flex w-full gap-3 rounded-lg p-2 text-left transition-all [contain-intrinsic-size:auto_72px] [content-visibility:auto]',
         active
           ? 'bg-brand-primary/10 ring-brand-primary/30 ring-1'
           : 'hover:bg-white/5',
       )}
       onClick={onClick}
     >
-      {/* Thumbnail — fixed 16:9 ratio */}
+      {/* Thumbnail — fixed 16:9 ratio; falls back to a lazily-extracted
+          poster frame from the front camera when no thumb.png exists */}
       <div className="h-14 w-24 flex-shrink-0 overflow-hidden rounded-md bg-neutral-800">
-        <Thumb file={item.thumb} />
+        <Thumb
+          file={item.thumb}
+          videoFile={
+            item.videos.find((v) => v.name.includes('-front')) ?? item.videos[0]
+          }
+          cacheKey={item.name}
+        />
       </div>
 
       {/* Info */}

@@ -4,6 +4,8 @@ export type ExportSettings = {
   showTime: boolean;
   showLocation: boolean;
   showDriveData: boolean;
+  /** Prefer a hardware H.264 encoder when the machine has one (much faster) */
+  hwAccel: boolean;
 };
 
 const STORAGE_KEY = 'tesla-cam-export-settings';
@@ -12,6 +14,7 @@ const DEFAULTS: ExportSettings = {
   showTime: true,
   showLocation: true,
   showDriveData: false,
+  hwAccel: true,
 };
 
 // ── Tiny external store (avoids React context + provider boilerplate) ──

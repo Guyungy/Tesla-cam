@@ -27,6 +27,7 @@ export function Settings({ open, onClose }: Props) {
     { key: 'showTime', label: t('settings.exportTime') },
     { key: 'showLocation', label: t('settings.exportLocation') },
     { key: 'showDriveData', label: t('settings.exportDriveData') },
+    { key: 'hwAccel', label: t('settings.exportHwAccel') },
   ];
 
   return (
