@@ -42,24 +42,85 @@ def extract_sei_from_file(path: Path) -> list[RawSEIMessage]:
 def convert_to_data_points(
     messages: list[RawSEIMessage],
     segment_start_seconds: float,
-    frame_duration_ms: float = 33.333,
+    segment_duration_seconds: float = 0.0,
+    fps: float = 36.0,
 ) -> list[SEIDataPoint]:
+    """Map SEI samples onto the timeline without stretching into parked tails."""
+    if not messages:
+        return []
+
     gear_map: dict[int, GearState] = {0: "P", 1: "D", 2: "R", 3: "N"}
     ap_map: dict[int, APStatus] = {0: "OFF", 1: "FSD", 2: "AP", 3: "STANDBY"}
-    return [
-        SEIDataPoint(
-            offset_seconds=segment_start_seconds + (index * frame_duration_ms) / 1000.0,
-            speed_kph=float(msg.get("vehicleSpeedMps", 0.0)) * 3.6,
-            gear=gear_map.get(int(msg.get("gearState", -1)), "UNKNOWN"),
-            steering_angle_deg=float(msg.get("steeringWheelAngle", 0.0)) * (180.0 / math.pi),
-            brake_pct=100.0 if bool(msg.get("brakeApplied", False)) else 0.0,
-            throttle_pct=float(msg.get("acceleratorPedalPosition", 0.0)) * 100.0,
-            ap_status=ap_map.get(int(msg.get("autopilotState", -1)), "UNKNOWN"),
-            latitude=float(msg.get("latitudeDeg", 0.0)),
-            longitude=float(msg.get("longitudeDeg", 0.0)),
+    safe_fps = fps if fps > 1 else 36.0
+
+    seqs = [msg.get("frameSeqNo") for msg in messages]
+    all_have_seq = all(isinstance(s, (int, float)) for s in seqs)
+    min_seq = min(seqs) if all_have_seq else 0  # type: ignore[type-var]
+
+    # Estimate the real frame rate from the data itself when possible: SEI is
+    # one sample per coded frame, so (span of samples) / duration ~= fps.
+    if segment_duration_seconds > 1:
+        if all_have_seq:
+            span = float(max(seqs)) - float(min_seq)  # type: ignore[type-var]
+        else:
+            span = float(len(messages) - 1)
+        est_fps = span / segment_duration_seconds
+        if 5.0 <= est_fps <= 120.0:
+            safe_fps = est_fps
+
+    raw_offsets: list[float] = []
+    for index, msg in enumerate(messages):
+        if all_have_seq:
+            raw_offsets.append(segment_start_seconds + (float(msg["frameSeqNo"]) - float(min_seq)) / safe_fps)
+        else:
+            raw_offsets.append(segment_start_seconds + index / safe_fps)
+
+    offsets = list(raw_offsets)
+    if segment_duration_seconds > 0:
+        max_off = max(raw_offsets)
+        end = segment_start_seconds + segment_duration_seconds
+        if max_off > end + 0.05 and max_off > segment_start_seconds:
+            span = max_off - segment_start_seconds
+            offsets = [
+                segment_start_seconds
+                + ((o - segment_start_seconds) / span) * segment_duration_seconds
+                for o in raw_offsets
+            ]
+
+    points: list[SEIDataPoint] = []
+    for index, msg in enumerate(messages):
+        gear = gear_map.get(int(msg.get("gearState", -1)), "UNKNOWN")
+        speed = _to_speed_kph(float(msg.get("vehicleSpeedMps", 0.0)))
+        if gear == "P" and speed < 1.5:
+            speed = 0.0
+        off = offsets[index]
+        if segment_duration_seconds > 0:
+            off = min(
+                segment_start_seconds + segment_duration_seconds,
+                max(segment_start_seconds, off),
+            )
+        points.append(
+            SEIDataPoint(
+                offset_seconds=off,
+                speed_kph=speed,
+                gear=gear,
+                steering_angle_deg=float(msg.get("steeringWheelAngle", 0.0)) * (180.0 / math.pi),
+                brake_pct=100.0 if bool(msg.get("brakeApplied", False)) else 0.0,
+                throttle_pct=min(100.0, max(0.0, float(msg.get("acceleratorPedalPosition", 0.0)) * 100.0)),
+                ap_status=ap_map.get(int(msg.get("autopilotState", -1)), "UNKNOWN"),
+                latitude=float(msg.get("latitudeDeg", 0.0)),
+                longitude=float(msg.get("longitudeDeg", 0.0)),
+            )
         )
-        for index, msg in enumerate(messages)
-    ]
+    return points
+
+
+def _to_speed_kph(raw: float) -> float:
+    if raw < 0:
+        return 0.0
+    if raw > 90:
+        return min(raw, 300.0)
+    return min(raw * 3.6, 300.0)
 
 
 def _find_mdat_box(data: bytes) -> tuple[int, int] | None:

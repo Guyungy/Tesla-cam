@@ -32,6 +32,9 @@ export const locales = {
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: 播放/暂停',
     'viewer.hint.seek': '←→: ±5秒',
+    'viewer.hint.fineSeek': 'Shift+←→: ±1秒',
+    'viewer.hint.frameStep': ',/.: 逐帧',
+    'viewer.hint.clipNav': '↑↓: 切换片段',
     'viewer.hint.fullscreen': 'F: 全屏',
     'viewer.hint.pip': 'P: 画中画',
     'viewer.hint.inOut': 'I/O: 入/出点',
@@ -77,11 +80,13 @@ export const locales = {
 
     // Start page
     'start.title': '特斯拉行车记录仪查看器',
-    'start.selectHint': '请选择 TeslaCam、RecentClips、SavedClips、SentryClips 目录',
+    'start.selectHint':
+      '请选择 TeslaCam、RecentClips、SavedClips、SentryClips 目录',
     'start.selectFolder': '选择文件夹',
     'start.noClips': '未匹配到有效视频文件，请重新选择',
     'start.localNote': '行车记录仪文件的读取分析查看均在浏览器本地运行',
-    'start.notSupported': '当前浏览器不支持文件夹读取功能，请使用最新版 Chrome 浏览器访问',
+    'start.notSupported':
+      '当前浏览器不支持文件夹读取功能，请使用最新版 Chrome 浏览器访问',
 
     // Drag & Drop
     'drop.hint': '拖放 TeslaCam 文件夹到此处',
@@ -90,6 +95,8 @@ export const locales = {
     'settings.title': '设置',
     'settings.language': '语言',
     'settings.close': '关闭',
+    'settings.playback': '播放',
+    'settings.autoAdvance': '播完自动连播下一段',
     'settings.export': '导出选项',
     'settings.exportTime': '显示时间',
     'settings.exportLocation': '显示位置',
@@ -110,7 +117,7 @@ export const locales = {
     'clipType.saved': '已保存',
     'clipType.recent': '最近',
   },
-  'en': {
+  en: {
     // TitleBar
     'titleBar.title': 'TeslaCam Viewer',
 
@@ -143,6 +150,9 @@ export const locales = {
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: Play/Pause',
     'viewer.hint.seek': '←→: ±5s',
+    'viewer.hint.fineSeek': 'Shift+←→: ±1s',
+    'viewer.hint.frameStep': ',/.: Frame step',
+    'viewer.hint.clipNav': '↑↓: Prev/Next clip',
     'viewer.hint.fullscreen': 'F: Fullscreen',
     'viewer.hint.pip': 'P: PiP',
     'viewer.hint.inOut': 'I/O: In/Out',
@@ -188,11 +198,14 @@ export const locales = {
 
     // Start page
     'start.title': 'Tesla Dashcam Viewer',
-    'start.selectHint': 'Select a TeslaCam, RecentClips, SavedClips, or SentryClips directory',
+    'start.selectHint':
+      'Select a TeslaCam, RecentClips, SavedClips, or SentryClips directory',
     'start.selectFolder': 'Select Folder',
     'start.noClips': 'No valid video files found, please try again',
-    'start.localNote': 'All file reading and analysis runs locally in your browser',
-    'start.notSupported': 'Your browser does not support folder reading. Please use the latest Chrome browser.',
+    'start.localNote':
+      'All file reading and analysis runs locally in your browser',
+    'start.notSupported':
+      'Your browser does not support folder reading. Please use the latest Chrome browser.',
 
     // Drag & Drop
     'drop.hint': 'Drop TeslaCam folder here',
@@ -201,6 +214,8 @@ export const locales = {
     'settings.title': 'Settings',
     'settings.language': 'Language',
     'settings.close': 'Close',
+    'settings.playback': 'Playback',
+    'settings.autoAdvance': 'Auto-play next clip',
     'settings.export': 'Export Options',
     'settings.exportTime': 'Show Time',
     'settings.exportLocation': 'Show Location',
@@ -224,4 +239,4 @@ export const locales = {
 } as const;
 
 export type Locale = keyof typeof locales;
-export type TranslationKey = keyof typeof locales['en'];
+export type TranslationKey = keyof (typeof locales)['en'];

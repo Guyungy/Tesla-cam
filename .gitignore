@@ -32,3 +32,6 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Local agent workspace / debug artifacts
+.claude/

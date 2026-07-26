@@ -37,8 +37,15 @@ export function TslMark({ size = 'md', className = '' }: Props) {
       <div className="absolute inset-[1px] rounded-[inherit] bg-[linear-gradient(145deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02)_35%,rgba(232,33,39,0.12)_100%)]" />
       <div className="absolute inset-x-2 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent" />
       <div className="relative flex items-center gap-1 pl-1 text-white">
-        <span className={['font-black uppercase', styles.text].join(' ')}>TSL</span>
-        <span className={['rounded-full bg-brand-primary shadow-[0_0_12px_rgba(232,33,39,0.8)]', styles.accent].join(' ')} />
+        <span className={['font-black uppercase', styles.text].join(' ')}>
+          TSL
+        </span>
+        <span
+          className={[
+            'bg-brand-primary rounded-full shadow-[0_0_12px_rgba(232,33,39,0.8)]',
+            styles.accent,
+          ].join(' ')}
+        />
       </div>
     </div>
   );

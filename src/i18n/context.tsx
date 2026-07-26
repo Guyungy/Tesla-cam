@@ -1,5 +1,12 @@
-import { createContext, useCallback, useContext, useState, type PropsWithChildren } from 'react';
-import { locales, type Locale, type TranslationKey } from './locales';
+import {
+  createContext,
+  type PropsWithChildren,
+  useCallback,
+  useContext,
+  useState,
+} from 'react';
+
+import { type Locale, locales, type TranslationKey } from './locales';
 
 type I18nContextType = {
   locale: Locale;
@@ -13,7 +20,9 @@ function getInitialLocale(): Locale {
   try {
     const saved = localStorage.getItem('tesla-cam-locale');
     if (saved && saved in locales) return saved as Locale;
-  } catch {}
+  } catch {
+    /* localStorage unavailable — fall through to auto-detect */
+  }
   // Auto-detect from browser
   const browserLang = navigator.language;
   if (browserLang.startsWith('zh')) return 'zh-CN';
@@ -25,18 +34,28 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   const setLocale = useCallback((newLocale: Locale) => {
     setLocaleState(newLocale);
-    try { localStorage.setItem('tesla-cam-locale', newLocale); } catch {}
+    try {
+      localStorage.setItem('tesla-cam-locale', newLocale);
+    } catch {
+      /* localStorage unavailable — non-fatal */
+    }
   }, []);
 
-  const t = useCallback((key: TranslationKey, params?: Record<string, string | number>): string => {
-    let text = (locales[locale] as Record<string, string>)[key] || (locales['en'] as Record<string, string>)[key] || key;
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        text = text.replace(`{${k}}`, String(v));
+  const t = useCallback(
+    (key: TranslationKey, params?: Record<string, string | number>): string => {
+      let text =
+        (locales[locale] as Record<string, string>)[key] ||
+        (locales['en'] as Record<string, string>)[key] ||
+        key;
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          text = text.replace(`{${k}}`, String(v));
+        }
       }
-    }
-    return text;
-  }, [locale]);
+      return text;
+    },
+    [locale],
+  );
 
   return (
     <I18nContext.Provider value={{ locale, setLocale, t }}>
@@ -45,6 +64,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- context hook lives beside its provider by design
 export function useI18n() {
   const ctx = useContext(I18nContext);
   if (!ctx) throw new Error('useI18n must be used within I18nProvider');

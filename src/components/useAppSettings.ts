@@ -1,24 +1,26 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
-export type ExportSettings = {
-  showTime: boolean;
-  showLocation: boolean;
-  showDriveData: boolean;
+import type { ViewType } from '../utils';
+
+export type AppSettings = {
+  /** Automatically play the next clip when the current one ends */
+  autoAdvance: boolean;
+  /** Last layout the user picked — restored for new clips when available */
+  preferredView: ViewType | null;
 };
 
-const STORAGE_KEY = 'tesla-cam-export-settings';
+const STORAGE_KEY = 'tesla-cam-app-settings';
 
-const DEFAULTS: ExportSettings = {
-  showTime: true,
-  showLocation: true,
-  showDriveData: false,
+const DEFAULTS: AppSettings = {
+  autoAdvance: true,
+  preferredView: null,
 };
 
-// ── Tiny external store (avoids React context + provider boilerplate) ──
-let current: ExportSettings = loadFromStorage();
+// ── Tiny external store (same pattern as useExportSettings) ──
+let current: AppSettings = loadFromStorage();
 const listeners = new Set<() => void>();
 
-function loadFromStorage(): ExportSettings {
+function loadFromStorage(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
@@ -28,7 +30,7 @@ function loadFromStorage(): ExportSettings {
   return { ...DEFAULTS };
 }
 
-function persist(next: ExportSettings) {
+function persist(next: AppSettings) {
   current = next;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -50,15 +52,15 @@ function getSnapshot() {
 }
 
 /**
- * Hook: read & write export settings.
+ * Hook: read & write app-level playback/UI settings.
  * No provider needed — backed by localStorage + useSyncExternalStore.
  */
-export function useExportSettings() {
+export function useAppSettings() {
   const settings = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  const update = useCallback((patch: Partial<ExportSettings>) => {
+  const update = useCallback((patch: Partial<AppSettings>) => {
     persist({ ...current, ...patch });
   }, []);
 
-  return { exportSettings: settings, setExportSettings: update };
+  return { appSettings: settings, setAppSettings: update };
 }

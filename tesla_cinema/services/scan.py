@@ -204,6 +204,13 @@ def extract_clip_sei(clip: CamClip, segments: list[CamSegment]):
         except Exception:
             raw_messages = []
         if raw_messages:
-            frame_duration_ms = (segment.duration * 1000.0) / max(len(raw_messages), 1)
-            all_points.extend(convert_to_data_points(raw_messages, segment.start_seconds, frame_duration_ms))
+            all_points.extend(
+                convert_to_data_points(
+                    raw_messages,
+                    segment.start_seconds,
+                    segment.duration,
+                )
+            )
+    # Keep the series monotonic even if frameSeqNo ordering is irregular
+    all_points.sort(key=lambda p: p.offset_seconds)
     return all_points

@@ -1,9 +1,16 @@
+import clsx from 'clsx';
 import dayjs from 'dayjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IoPause, IoPlay, IoTrashOutline, IoVolumeHigh, IoVolumeMute } from 'react-icons/io5';
-import { MdReplay, MdPictureInPicture } from 'react-icons/md';
-import clsx from 'clsx';
+import {
+  IoPause,
+  IoPlay,
+  IoTrashOutline,
+  IoVolumeHigh,
+  IoVolumeMute,
+} from 'react-icons/io5';
+import { MdPictureInPicture, MdReplay } from 'react-icons/md';
 
+import { type TranslationKey, useI18n } from '../i18n';
 import {
   calcEventSeconds,
   calcSeekInfo,
@@ -19,14 +26,14 @@ import {
   type SEIDataPoint,
   type ViewType,
 } from '../utils';
-import { useI18n, type TranslationKey } from '../i18n';
 import { Dashboard } from './Dashboard';
+import { ExportModal } from './ExportModal';
 import { IconBtn } from './IconBtn';
 import { Player } from './Player';
 import { Progress } from './Progress';
 import { Rate } from './Rate';
-import { ExportModal } from './ExportModal';
 import { Toast } from './Toast';
+import { useAppSettings } from './useAppSettings';
 import { useExportSettings } from './useExportSettings';
 
 type Props = {
@@ -34,16 +41,46 @@ type Props = {
   footage: CamFootage;
   /** Callback to update footage with SEI data once loaded */
   onFootageUpdate?: (footage: CamFootage) => void;
-  onDelete?: (clip: CamClip) => Promise<{ ok: boolean; canceled?: boolean; error?: string } | undefined>;
+  onDelete?: (
+    clip: CamClip,
+  ) => Promise<{ ok: boolean; canceled?: boolean; error?: string } | undefined>;
+  /** Fired once when playback reaches the end of the whole clip */
+  onClipEnded?: () => void;
 };
 
+/** Canvas RGBA pipe is heavy — keep a cap. Compose export (source files) can go longer. */
 const MAX_EXPORT_SECONDS = 60;
+const MAX_COMPOSE_EXPORT_SECONDS = 600;
 const SINGLE_EXPORT_MAX_WIDTH = 3840;
 const TESLA_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M40 2L10 2C9.445 2 9 2.449 9 3L9 47C9 47.551 9.445 48 10 48L40 48C40.555 48 41 47.551 41 47L41 3C41 2.449 40.555 2 40 2ZM23.137 10.094C24.375 10.063 25.625 10.063 26.867 10.094C30.074 10.176 33.285 10.515 36.309 11.539L35.633 12.531C33.074 11.633 30.035 11.199 26.828 11.105C25.617 11.066 24.383 11.066 23.172 11.105C19.965 11.199 16.93 11.633 14.367 12.531L13.695 11.539C16.719 10.515 19.926 10.176 23.137 10.094ZM17.086 37.078C17.02 37.359 16.793 37.594 16.484 37.715L15.547 37.715L15.492 37.738L15.492 40.27L14.906 40.27L14.906 37.738L14.859 37.715L13.922 37.715C13.613 37.594 13.387 37.359 13.32 37.078L13.32 37.074L17.086 37.074ZM21.34 40.266L19.113 40.266C18.801 40.141 18.57 39.906 18.508 39.625L21.941 39.625C21.879 39.906 21.652 40.141 21.34 40.266ZM21.34 38.965L19.113 38.965C18.801 38.844 18.57 38.605 18.508 38.328L21.941 38.328C21.879 38.605 21.652 38.844 21.34 38.965ZM21.34 37.727L19.113 37.727C18.801 37.602 18.57 37.367 18.508 37.086L21.941 37.086C21.879 37.367 21.652 37.602 21.34 37.727ZM26.867 40.27L23.617 40.27L23.629 40.246C23.691 39.965 23.918 39.75 24.223 39.625L26.289 39.625L26.289 38.965L23.617 38.965L23.617 37.078L26.852 37.078C26.785 37.359 26.559 37.609 26.25 37.703L24.191 37.703L24.191 38.336L26.867 38.336ZM31.16 40.246L28.523 40.238L28.523 37.078L29.102 37.074L29.098 39.617L31.668 39.617C31.605 39.883 31.449 40.113 31.16 40.246ZM28.453 13.633L25 32.164L21.547 13.633C19.699 13.633 17.781 13.918 17.73 15.277C16.863 15.059 15.281 14.074 14.918 13.383C17.555 12.316 21.902 12.176 23.789 12.246L25 13.8L26.211 12.246C28.098 12.176 32.449 12.316 35.086 13.383C34.719 14.074 33.137 15.059 32.266 15.277C32.219 13.918 30.297 13.633 28.453 13.633ZM36.602 40.258L36.027 40.258L36.027 38.969L33.934 38.969L33.934 40.258L33.355 40.258L33.355 38.32L36.602 38.324ZM36.086 37.711L33.859 37.711C33.547 37.586 33.305 37.363 33.246 37.082L36.68 37.082C36.617 37.363 36.398 37.586 36.086 37.711Z" fill="white"/></svg>`;
 const TESLA_ICON_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(TESLA_ICON_SVG)}`;
 
 /** All 6 camera names */
-const ALL_CAMS: CamName[] = ['front', 'back', 'left', 'right', 'left_pillar', 'right_pillar'];
+const ALL_CAMS: CamName[] = [
+  'front',
+  'back',
+  'left',
+  'right',
+  'left_pillar',
+  'right_pillar',
+];
+
+/** Extract a human-readable message from an unknown thrown value. */
+function errText(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+function resolveCamFromFileName(fileName: string): CamName | undefined {
+  const restName = fileName.slice(20);
+  if (restName.startsWith('front')) return 'front';
+  if (restName.startsWith('back')) return 'back';
+  if (restName.startsWith('left_repeater')) return 'left';
+  if (restName.startsWith('right_repeater')) return 'right';
+  if (restName.startsWith('left_pillar')) return 'left_pillar';
+  if (restName.startsWith('right_pillar')) return 'right_pillar';
+  return undefined;
+}
 
 /** Display labels for camera names (UI) */
 const CAM_LABELS: Record<CamName, string> = {
@@ -78,9 +115,16 @@ const LAYOUT_OPTIONS: { id: ViewType; label: string }[] = [
   { id: 'right_pillar', label: 'R-Pillar' },
 ];
 
-export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
+export function Viewer({
+  clip,
+  footage,
+  onFootageUpdate,
+  onDelete,
+  onClipEnded,
+}: Props) {
   const { t } = useI18n();
   const { exportSettings } = useExportSettings();
+  const { appSettings, setAppSettings } = useAppSettings();
 
   // ── Video Refs (6 cameras) ──
   const frontRef = useRef<HTMLVideoElement>(null);
@@ -90,21 +134,34 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
   const leftPillarRef = useRef<HTMLVideoElement>(null);
   const rightPillarRef = useRef<HTMLVideoElement>(null);
 
-  const refMap: Record<CamName, React.RefObject<HTMLVideoElement | null>> = useMemo(() => ({
-    front: frontRef,
-    back: backRef,
-    left: leftRef,
-    right: rightRef,
-    left_pillar: leftPillarRef,
-    right_pillar: rightPillarRef,
-  }), []);
+  const refMap: Record<
+    CamName,
+    React.RefObject<HTMLVideoElement | null>
+  > = useMemo(
+    () => ({
+      front: frontRef,
+      back: backRef,
+      left: leftRef,
+      right: rightRef,
+      left_pillar: leftPillarRef,
+      right_pillar: rightPillarRef,
+    }),
+    [],
+  );
 
   const players = useMemo(() => Object.values(refMap), [refMap]);
 
   // ── Playing State ──
-  const [statesMap, setStateMap] = useState<Record<CamName, PlayerState>>(() => ({
-    back: {}, front: {}, left: {}, right: {}, left_pillar: {}, right_pillar: {},
-  }));
+  const [statesMap, setStateMap] = useState<Record<CamName, PlayerState>>(
+    () => ({
+      back: {},
+      front: {},
+      left: {},
+      right: {},
+      left_pillar: {},
+      right_pillar: {},
+    }),
+  );
   const handleChangeState = useCallback((key: CamName, val: PlayerState) => {
     setStateMap((s) => ({ ...s, [key]: val }));
   }, []);
@@ -166,44 +223,80 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
     seiLoadingRef.current = true;
 
     let cancelled = false;
-    console.log('[SEI] Starting metadata extraction for', clip.videos.length, 'video files...');
-    extractFootageSEI(clip.videos, footage).then((seiData) => {
-      if (cancelled) return;
-      seiLoadingRef.current = false;
-      if (seiData) {
-        console.log('[SEI] Found', seiData.length, 'data points');
-        if (onFootageUpdate) {
-          onFootageUpdate({ ...footage, seiData });
+    console.log(
+      '[SEI] Starting metadata extraction for',
+      clip.videos.length,
+      'video files...',
+    );
+    extractFootageSEI(clip.videos, footage)
+      .then((seiData) => {
+        if (cancelled) return;
+        seiLoadingRef.current = false;
+        if (seiData) {
+          console.log('[SEI] Found', seiData.length, 'data points');
+          if (onFootageUpdate) {
+            onFootageUpdate({ ...footage, seiData });
+          }
+        } else {
+          console.log(
+            '[SEI] No metadata found (video may be from firmware < 2025.44.25)',
+          );
         }
-      } else {
-        console.log('[SEI] No metadata found (video may be from firmware < 2025.44.25)');
-      }
-    }).catch((e) => {
-      if (cancelled) return;
-      seiLoadingRef.current = false;
-      console.warn('[SEI] Extraction failed:', e);
-    });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        seiLoadingRef.current = false;
+        console.warn('[SEI] Extraction failed:', e);
+      });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.name]); // Only run once per clip
 
-  // ── SEI Metadata ──
-  const hasMetadata = !!footage.seiData && footage.seiData.length > 0;
+  // ── SEI Metadata (real only — never invent speed/gear with demo curves) ──
+  const seiSeries = useMemo<SEIDataPoint[]>(
+    () =>
+      footage.seiData && footage.seiData.length > 0 ? footage.seiData : [],
+    [footage.seiData],
+  );
+  const hasRealMetadata = seiSeries.length > 0;
+  const hasMetadata = hasRealMetadata;
 
   const currentSEI: SEIDataPoint | null = useMemo(() => {
-    if (!footage.seiData || footage.seiData.length === 0) return null;
-    // Binary search for the closest data point
+    if (seiSeries.length === 0) return null;
+    // Nearest sample at/before playhead; if playhead is before first sample, use first.
+    // Do not hold the last driving sample across a long parked gap with no SEI:
+    // if gap since last sample > 2s, clear motion metrics (parked / no metadata).
     const target = clipPlayedSeconds;
-    const data = footage.seiData;
-    let lo = 0, hi = data.length - 1;
+    const data = seiSeries;
+    let lo = 0;
+    let hi = data.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       if (data[mid].offsetSeconds <= target) lo = mid;
       else hi = mid - 1;
     }
-    return data[lo] ?? null;
-  }, [footage.seiData, clipPlayedSeconds]);
+    const sample = data[lo];
+    if (!sample) return null;
+    if (sample.offsetSeconds > target) {
+      // playhead before any sample
+      return target + 0.5 < sample.offsetSeconds ? null : sample;
+    }
+    const age = target - sample.offsetSeconds;
+    if (age > 2.0) {
+      // Stale: keep GPS/gear context but force stopped speed/pedals when sample is old
+      return {
+        ...sample,
+        offsetSeconds: target,
+        speedKph: sample.gear === 'P' || age > 5 ? 0 : sample.speedKph,
+        throttlePct: age > 5 ? 0 : sample.throttlePct,
+        brakePct: age > 5 ? 0 : sample.brakePct,
+      };
+    }
+    return sample;
+  }, [seiSeries, clipPlayedSeconds]);
 
   // ── Overlay ref for drawFrame (avoids stale closure) ──
   const overlayRef = useRef({
@@ -238,6 +331,18 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
     setSegmentIndex(0);
     setPlaying(true);
   };
+
+  // Notify parent exactly once when the whole clip finishes (auto-advance)
+  const clipEndedNotifiedRef = useRef(false);
+  useEffect(() => {
+    if (!isClipEnded) {
+      clipEndedNotifiedRef.current = false;
+      return;
+    }
+    if (clipEndedNotifiedRef.current) return;
+    clipEndedNotifiedRef.current = true;
+    onClipEnded?.();
+  }, [isClipEnded, onClipEnded]);
   const seek = useCallback(
     (seconds: number) => {
       const res = calcSeekInfo(footage, seconds);
@@ -255,6 +360,20 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
       seek(clipPlayedSeconds + seconds);
     },
     [isClipEnded, clipPlayedSeconds, seek],
+  );
+
+  /**
+   * Frame-accurate step (~1/30s). Reads the live element time — the throttled
+   * state can lag up to 120ms, which would make steps land unpredictably.
+   */
+  const stepFrame = useCallback(
+    (dir: 1 | -1) => {
+      setPlaying(false);
+      const video = players.find((p) => p.current)?.current;
+      const segSeconds = video ? video.currentTime : segmentPlayedSeconds;
+      seek(segment.startSeconds + segSeconds + dir / 30);
+    },
+    [players, segment.startSeconds, segmentPlayedSeconds, seek],
   );
 
   // ── PiP ──
@@ -279,17 +398,39 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
     setSeekTask(undefined);
   }, [players, seekTask, states]);
 
-  // ── View Type ──
+  // ── View Type (restore the user's last-picked layout when available) ──
   const defaultView: ViewType = hasPillarCams ? 'grid6' : 'grid4';
-  const [viewType, setViewType] = useState<ViewType>(defaultView);
+  const [viewType, setViewTypeState] = useState<ViewType>(() => {
+    const preferred = appSettings.preferredView;
+    if (!preferred) return defaultView;
+    // Pillar-cam layouts fall back gracefully when the clip lacks those cams
+    if (
+      !hasPillarCams &&
+      (preferred === 'grid6' || preferred.includes('pillar'))
+    ) {
+      return defaultView;
+    }
+    return preferred;
+  });
+  const setViewType = useCallback(
+    (v: ViewType) => {
+      setViewTypeState(v);
+      setAppSettings({ preferredView: v });
+    },
+    [setAppSettings],
+  );
 
   // Determine which cameras are visible in current layout
   const visibleCams: CamName[] = useMemo(() => {
     switch (viewType) {
-      case 'grid6': return ALL_CAMS;
-      case 'grid4': return ['front', 'back', 'left', 'right'];
-      case 'grid4old': return ['front', 'back', 'left', 'right'];
-      default: return [viewType as CamName];
+      case 'grid6':
+        return ALL_CAMS;
+      case 'grid4':
+        return ['front', 'back', 'left', 'right'];
+      case 'grid4old':
+        return ['front', 'back', 'left', 'right'];
+      default:
+        return [viewType as CamName];
     }
   }, [viewType]);
 
@@ -307,11 +448,13 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
 
   // ── Volume Control ──
   const [muted, setMuted] = useState(true);
+  // Re-sync on segment/layout change too: newly-mounted or reloaded <video>
+  // elements start muted (attribute), so an unmuted state must be re-applied.
   useEffect(() => {
     players.forEach((p) => {
       if (p.current) p.current.muted = muted;
     });
-  }, [muted, players]);
+  }, [muted, players, segmentIndex, viewType]);
 
   // ── Export Logic ──
   const [exporting, setExporting] = useState(false);
@@ -322,6 +465,7 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
   const [exportIn, setExportIn] = useState<number>();
   const [exportOut, setExportOut] = useState<number>();
   const isCancelingRef = useRef(false);
+  const activeExportSessionRef = useRef<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -343,7 +487,8 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
   const handleKeyboardControl = useCallback(
     (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        return;
 
       switch (event.code) {
         case 'Space':
@@ -352,11 +497,21 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
           break;
         case 'ArrowLeft':
           event.preventDefault();
-          jump(-5);
+          jump(event.shiftKey ? -1 : -5);
           break;
         case 'ArrowRight':
           event.preventDefault();
-          jump(5);
+          jump(event.shiftKey ? 1 : 5);
+          break;
+        case 'Comma':
+          // Frame step back — pauses playback for precise scrubbing
+          event.preventDefault();
+          stepFrame(-1);
+          break;
+        case 'Period':
+          // Frame step forward
+          event.preventDefault();
+          stepFrame(1);
           break;
         case 'KeyF':
           event.preventDefault();
@@ -384,7 +539,7 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
           break;
       }
     },
-    [jump, togglePiP, markExportIn, markExportOut],
+    [jump, stepFrame, togglePiP, markExportIn, markExportOut],
   );
   useEffect(() => {
     window.addEventListener('keydown', handleKeyboardControl);
@@ -401,14 +556,38 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
     [],
   );
 
+  const canUseComposeExport = useMemo(() => {
+    if (!window.electronAPI?.exportCompose) return false;
+    if (clip.videos.length === 0) return false;
+    // Compose reads source files from disk directly, so EVERY video must
+    // resolve to a real path — otherwise fall back to the canvas pipeline
+    // instead of silently exporting black cells for unresolvable cameras.
+    return clip.videos.every((f) => {
+      try {
+        return !!window.electronAPI?.getPathForFile(f);
+      } catch {
+        return false;
+      }
+    });
+  }, [clip.videos]);
+
+  const maxExportSeconds = canUseComposeExport
+    ? MAX_COMPOSE_EXPORT_SECONDS
+    : MAX_EXPORT_SECONDS;
+
   const exportableSeconds = useMemo(() => {
     if (exportSelectionSeconds > 0)
-      return Math.min(MAX_EXPORT_SECONDS, exportSelectionSeconds);
+      return Math.min(maxExportSeconds, exportSelectionSeconds);
     return Math.min(
-      MAX_EXPORT_SECONDS,
+      maxExportSeconds,
       Math.max(0, footage.duration - clipPlayedSeconds),
     );
-  }, [clipPlayedSeconds, exportSelectionSeconds, footage.duration]);
+  }, [
+    clipPlayedSeconds,
+    exportSelectionSeconds,
+    footage.duration,
+    maxExportSeconds,
+  ]);
 
   // ── drawFrame (supports all layouts) ──
   const drawFrame = useCallback(
@@ -428,7 +607,10 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
        */
       const drawVideo = (
         video: HTMLVideoElement | null,
-        cx: number, cy: number, cw: number, ch: number,
+        cx: number,
+        cy: number,
+        cw: number,
+        ch: number,
       ) => {
         if (!video || video.readyState < 2) return;
         const vw = video.videoWidth;
@@ -505,7 +687,13 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
       const labelPad = Math.round(8 * scale);
       ctx.font = `500 ${labelFontSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
 
-      const drawCamLabel = (cam: CamName, x: number, y: number, w: number, h: number) => {
+      const drawCamLabel = (
+        cam: CamName,
+        x: number,
+        y: number,
+        w: number,
+        h: number,
+      ) => {
         const label = tFn(CAM_I18N_KEYS[cam]);
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         const tw = ctx.measureText(label).width;
@@ -519,7 +707,8 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
       // Draw camera labels based on layout
       switch (layout) {
         case 'grid6': {
-          const cellW = width / 3, cellH = vH / 2;
+          const cellW = width / 3,
+            cellH = vH / 2;
           drawCamLabel('left', 0, 0, cellW, cellH);
           drawCamLabel('front', cellW, 0, cellW, cellH);
           drawCamLabel('right', cellW * 2, 0, cellW, cellH);
@@ -529,7 +718,8 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
           break;
         }
         case 'grid4': {
-          const halfW = width / 2, halfH = vH / 2;
+          const halfW = width / 2,
+            halfH = vH / 2;
           drawCamLabel('front', 0, 0, halfW, halfH);
           drawCamLabel('back', halfW, 0, halfW, halfH);
           drawCamLabel('left', 0, halfH, halfW, halfH);
@@ -537,7 +727,8 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
           break;
         }
         case 'grid4old': {
-          const topH = vH * 0.6, botH = vH - topH;
+          const topH = vH * 0.6,
+            botH = vH - topH;
           const thirdW = width / 3;
           drawCamLabel('front', 0, 0, width, topH);
           drawCamLabel('left', 0, topH, thirdW, botH);
@@ -559,26 +750,44 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
 
         // Speed (large, centered)
         const speedVal = sei.speedKph != null ? Math.round(sei.speedKph) : '--';
-        const speedColor = sei.speedKph != null
-          ? (sei.speedKph > 120 ? '#ef4444' : sei.speedKph > 80 ? '#eab308' : '#22c55e')
-          : '#a3a3a3';
+        const speedColor =
+          sei.speedKph != null
+            ? sei.speedKph > 120
+              ? '#ef4444'
+              : sei.speedKph > 80
+                ? '#eab308'
+                : '#22c55e'
+            : '#a3a3a3';
         const speedSize = Math.max(24, Math.round(36 * scale));
         ctx.font = `bold ${speedSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
         ctx.fillStyle = speedColor;
         const speedText = `${speedVal}`;
         const speedW = ctx.measureText(speedText).width;
-        ctx.fillText(speedText, (width - speedW) / 2, topBarH / 2 + speedSize * 0.35);
+        ctx.fillText(
+          speedText,
+          (width - speedW) / 2,
+          topBarH / 2 + speedSize * 0.35,
+        );
 
         // Unit
         const unitSize = Math.max(10, Math.round(12 * scale));
         ctx.font = `500 ${unitSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
         ctx.fillStyle = '#737373';
-        ctx.fillText('km/h', (width - speedW) / 2 + speedW + tp, topBarH / 2 + unitSize * 0.3);
+        ctx.fillText(
+          'km/h',
+          (width - speedW) / 2 + speedW + tp,
+          topBarH / 2 + unitSize * 0.3,
+        );
 
         // Gear (left side)
         const gearSize = Math.max(16, Math.round(22 * scale));
         ctx.font = `bold ${gearSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-        const gearColors: Record<string, string> = { D: '#22c55e', R: '#ef4444', N: '#eab308', P: '#737373' };
+        const gearColors: Record<string, string> = {
+          D: '#22c55e',
+          R: '#ef4444',
+          N: '#eab308',
+          P: '#737373',
+        };
         ctx.fillStyle = gearColors[sei.gear] || '#737373';
         ctx.fillText(sei.gear, tp * 2, topBarH / 2 + gearSize * 0.3);
 
@@ -586,11 +795,20 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
         if (sei.apStatus && sei.apStatus !== 'UNKNOWN') {
           const apSize = Math.max(10, Math.round(12 * scale));
           ctx.font = `600 ${apSize}px "Inter", "SF Pro Display", "Segoe UI", sans-serif`;
-          const apColors: Record<string, string> = { AP: '#3b82f6', FSD: '#6366f1', STANDBY: '#eab308', OFF: '#737373' };
+          const apColors: Record<string, string> = {
+            AP: '#3b82f6',
+            FSD: '#6366f1',
+            STANDBY: '#eab308',
+            OFF: '#737373',
+          };
           ctx.fillStyle = apColors[sei.apStatus] || '#737373';
           const apText = sei.apStatus;
           const apW = ctx.measureText(apText).width;
-          ctx.fillText(apText, width - tp * 2 - apW, topBarH / 2 + apSize * 0.3);
+          ctx.fillText(
+            apText,
+            width - tp * 2 - apW,
+            topBarH / 2 + apSize * 0.3,
+          );
         }
       }
 
@@ -678,8 +896,12 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
   const resolveCanvasSize = useCallback(() => {
     const visibleVideoRefs = visibleCams
       .map((cam) => refMap[cam]?.current)
-      .filter((video): video is HTMLVideoElement => !!video?.videoWidth && !!video?.videoHeight);
-    const baseVideo = visibleVideoRefs[0] || frontRef.current || backRef.current;
+      .filter(
+        (video): video is HTMLVideoElement =>
+          !!video?.videoWidth && !!video?.videoHeight,
+      );
+    const baseVideo =
+      visibleVideoRefs[0] || frontRef.current || backRef.current;
     const fallbackWidth = 1280;
     const fallbackHeight = 720;
     const baseWidth = baseVideo?.videoWidth || fallbackWidth;
@@ -722,7 +944,7 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
         return { width: w, height: h + bottomBarHeight, videoHeight: h };
       }
     }
-  }, [viewType]);
+  }, [viewType, refMap, visibleCams]);
 
   // ── Screenshots ──
   const exportScreenshot = useCallback(async () => {
@@ -741,27 +963,34 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
           try {
             const arrayBuffer = await blob.arrayBuffer();
             const fileName = `${clip.name}-${viewType}.jpg`;
-            const path = await window.electronAPI?.saveFile(fileName, arrayBuffer);
+            const path = await window.electronAPI?.saveFile(
+              fileName,
+              arrayBuffer,
+            );
             if (path) {
               setToastMsg(t('toast.screenshotSaved'));
               window.electronAPI?.showItemInFolder(path);
             }
-          } catch (e: any) {
+          } catch (e) {
             console.error('Save screenshot failed', e);
-            setToastMsg(t('toast.saveFailed', { error: e.message }));
+            setToastMsg(t('toast.saveFailed', { error: errText(e) }));
           }
         },
         'image/jpeg',
         0.92,
       );
-    } catch (error: any) {
+    } catch (error) {
       console.error('Screenshot failed', error);
-      setToastMsg(t('toast.screenshotFailed', { error: error.message }));
+      setToastMsg(t('toast.screenshotFailed', { error: errText(error) }));
     }
-  }, [clip.name, drawFrame, resolveCanvasSize, viewType]);
+  }, [clip.name, drawFrame, resolveCanvasSize, viewType, t]);
 
   const cancelExport = useCallback(() => {
     isCancelingRef.current = true;
+    const sessionId = activeExportSessionRef.current;
+    if (!sessionId) return;
+    window.electronAPI?.exportComposeCancel?.(sessionId);
+    window.electronAPI?.exportCancel?.(sessionId);
   }, []);
 
   const deleteClip = useCallback(async () => {
@@ -770,7 +999,9 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
     try {
       const result = await onDelete(clip);
       if (!result?.ok && !result?.canceled) {
-        setToastMsg(t('toast.deleteFailed', { error: result?.error || 'unknown' }));
+        setToastMsg(
+          t('toast.deleteFailed', { error: result?.error || 'unknown' }),
+        );
         return;
       }
       if (result?.ok) {
@@ -791,7 +1022,8 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
       return;
     }
     try {
-      const header = 'offset_s,speed_kph,gear,steering_deg,brake_pct,throttle_pct,ap_status,latitude,longitude';
+      const header =
+        'offset_s,speed_kph,gear,steering_deg,brake_pct,throttle_pct,ap_status,latitude,longitude';
       const lines = footage.seiData.map((d) =>
         [
           d.offsetSeconds.toFixed(3),
@@ -803,7 +1035,7 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
           d.apStatus,
           d.latitude.toFixed(8),
           d.longitude.toFixed(8),
-        ].join(',')
+        ].join(','),
       );
       const csv = [header, ...lines].join('\n');
       const blob = new Blob([csv], { type: 'text/csv' });
@@ -814,16 +1046,22 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
         setToastMsg(t('toast.csvExported'));
         window.electronAPI?.showItemInFolder(path);
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error('CSV export failed', e);
-      setToastMsg(t('toast.csvFailed', { error: e.message }));
+      setToastMsg(t('toast.csvFailed', { error: errText(e) }));
     }
-  }, [clip.name, footage.seiData]);
+  }, [clip.name, footage.seiData, t]);
 
   /** Wait for a video element to have renderable frame data after seeking */
-  const waitForVideoReady = (video: HTMLVideoElement, timeoutMs = 5000): Promise<void> => {
+  const waitForVideoReady = (
+    video: HTMLVideoElement,
+    timeoutMs = 5000,
+  ): Promise<void> => {
     return new Promise((resolve) => {
-      if (video.readyState >= 2) { resolve(); return; }
+      if (video.readyState >= 2) {
+        resolve();
+        return;
+      }
       const timer = setTimeout(resolve, timeoutMs);
       const onReady = () => {
         clearTimeout(timer);
@@ -880,34 +1118,212 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
     [footage, players, waitForLayoutCommit],
   );
 
-  // ── Video Export (FFmpeg H.264) ──
+  /** Resolve absolute disk paths for each segment/camera from clip.videos */
+  const buildComposeSegments = useCallback(() => {
+    const pathByName: Record<string, string> = {};
+    for (const file of clip.videos) {
+      try {
+        const p = window.electronAPI?.getPathForFile(file);
+        if (p) pathByName[file.name] = p;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return footage.segments.map((seg) => {
+      const paths: Record<string, string | undefined> = {};
+      for (const cam of ALL_CAMS) {
+        // File name pattern: YYYY-MM-DD_HH-MM-SS-{cam}.mp4
+        const match = clip.videos.find(
+          (f) =>
+            f.name.startsWith(seg.name) &&
+            resolveCamFromFileName(f.name) === cam,
+        );
+        if (match && pathByName[match.name]) {
+          paths[cam] = pathByName[match.name];
+        }
+      }
+      return {
+        name: seg.name,
+        startSeconds: seg.startSeconds,
+        duration: seg.duration,
+        paths,
+      };
+    });
+  }, [clip.videos, footage.segments]);
+
+  /**
+   * Pre-sample SEI telemetry into merged text windows for the compose overlay.
+   * Times are relative to export start. Consecutive identical texts merge;
+   * step widens for long exports so the window count stays bounded.
+   */
+  const buildDriveWindows = useCallback(
+    (rangeStart: number, rangeDuration: number) => {
+      if (seiSeries.length === 0) return [];
+      const MAX_WINDOWS = 240;
+      const step = Math.max(1, rangeDuration / MAX_WINDOWS);
+      const windows: { start: number; end: number; text: string }[] = [];
+
+      const sampleAt = (target: number): SEIDataPoint | null => {
+        let lo = 0;
+        let hi = seiSeries.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (seiSeries[mid].offsetSeconds <= target) lo = mid;
+          else hi = mid - 1;
+        }
+        const s = seiSeries[lo];
+        if (!s) return null;
+        // Same staleness rule as the live dashboard: don't show old samples
+        if (s.offsetSeconds > target + 0.5 || target - s.offsetSeconds > 2)
+          return null;
+        return s;
+      };
+
+      for (let t0 = 0; t0 < rangeDuration; t0 += step) {
+        const sample = sampleAt(rangeStart + t0);
+        if (!sample) continue;
+        const text = `${Math.round(sample.speedKph)} km/h  ${sample.gear}  ${sample.apStatus}`;
+        const end = Math.min(t0 + step, rangeDuration);
+        const prev = windows[windows.length - 1];
+        if (prev && prev.text === text && Math.abs(prev.end - t0) < 0.01) {
+          prev.end = end;
+        } else {
+          windows.push({ start: t0, end, text });
+        }
+      }
+      return windows;
+    },
+    [seiSeries],
+  );
+
+  // ── Video Export: prefer compose (source files), fall back to canvas RGBA ──
   const exportCurrentView = useCallback(async () => {
     if (exporting) return;
     if (exportableSeconds <= 0) {
       setToastMsg(t('toast.noContent'));
       return;
     }
+
+    const exportStartSeconds =
+      exportSelectionSeconds > 0 && exportIn !== undefined
+        ? exportIn
+        : clipPlayedSeconds;
+
+    const sessionId = `export-${Date.now()}`;
+    activeExportSessionRef.current = sessionId;
+    const prevPlaybackRate = playbackRate;
+    const fileName = `${clip.name}-${viewType}.mp4`;
+
+    // ── Fast path: FFmpeg filter_complex from source files ──
+    if (window.electronAPI?.exportCompose && canUseComposeExport) {
+      setPlaying(false);
+      setPlaybackRate(1);
+      setExporting(true);
+      setExportProgress(0);
+      setExportFrameCount(0);
+      setExportEta(undefined);
+      setExportEncoding(true);
+      isCancelingRef.current = false;
+
+      const startMark = performance.now();
+      const unsub = window.electronAPI.onExportComposeProgress?.((data) => {
+        if (data.sessionId !== sessionId) return;
+        setExportProgress(data.progress);
+        setExportFrameCount(Math.round(data.outTimeSec * 30));
+        if (data.progress > 2 && data.outTimeSec > 0.5) {
+          const rate =
+            data.outTimeSec / ((performance.now() - startMark) / 1000);
+          if (rate > 0.01) {
+            const etaSec = (exportableSeconds - data.outTimeSec) / rate;
+            if (etaSec > 60) {
+              setExportEta(
+                `${Math.floor(etaSec / 60)}m ${Math.round(etaSec % 60)}s`,
+              );
+            } else {
+              setExportEta(`${Math.round(Math.max(0, etaSec))}s`);
+            }
+          }
+        }
+      });
+
+      try {
+        // Export-start wall-clock moment: static label as fallback, unix
+        // epoch for a live-updating drawtext clock in the output video.
+        const exportStartMoment = (() => {
+          const info = calcSeekInfo(footage, exportStartSeconds);
+          if (!info) return null;
+          return dayjs(parseTime(footage.segments[info.index].name)).add(
+            info.seconds,
+            'second',
+          );
+        })();
+
+        const result = await window.electronAPI.exportCompose({
+          sessionId,
+          fileName,
+          viewType,
+          startSeconds: exportStartSeconds,
+          durationSeconds: exportableSeconds,
+          segments: buildComposeSegments(),
+          labels: CAM_LABELS,
+          overlay: {
+            showTime: exportSettings.showTime,
+            showLocation: exportSettings.showLocation,
+            showDriveData: exportSettings.showDriveData,
+            locationText,
+            baseTimestampLabel:
+              exportStartMoment?.format(timestampFmt) ?? formatTime,
+            baseTimestampEpoch: exportStartMoment?.unix(),
+            driveWindows: exportSettings.showDriveData
+              ? buildDriveWindows(exportStartSeconds, exportableSeconds)
+              : undefined,
+          },
+          fps: 30,
+        });
+
+        unsub?.();
+        activeExportSessionRef.current = null;
+        setExporting(false);
+        setExportProgress(0);
+        setExportEncoding(false);
+        setPlaybackRate(prevPlaybackRate);
+
+        if (isCancelingRef.current || result.canceled) {
+          return;
+        }
+        if (result.ok && result.filePath) {
+          setToastMsg(t('toast.videoSaved'));
+          window.electronAPI.showItemInFolder(result.filePath);
+        } else {
+          console.error('Compose export failed:', result.error);
+          setToastMsg(
+            t('toast.exportFailedStart', { error: result.error || 'unknown' }),
+          );
+        }
+      } catch (e) {
+        unsub?.();
+        activeExportSessionRef.current = null;
+        setExporting(false);
+        setExportEncoding(false);
+        setPlaybackRate(prevPlaybackRate);
+        setToastMsg(t('toast.exportError', { error: errText(e) }));
+      }
+      return;
+    }
+
+    // ── Legacy path: canvas RGBA pipe ──
     if (!window.electronAPI?.exportStart) {
       setToastMsg(t('toast.exportFailed'));
       return;
     }
 
-    const sessionId = `export-${Date.now()}`;
-    const prevPlaybackRate = playbackRate;
-
     try {
-      const exportStartSeconds =
-        exportSelectionSeconds > 0 && exportIn !== undefined
-          ? exportIn
-          : clipPlayedSeconds;
-
-      // 1. Pause and set rate to 1x
       setPlaying(false);
       setPlaybackRate(1);
       await waitForLayoutCommit();
       const initialSeekInfo = await seekExportFrame(exportStartSeconds);
 
-      // 2. Canvas setup
       const { width, height, videoHeight } = resolveCanvasSize();
       const canvas = document.createElement('canvas');
       canvas.width = width;
@@ -915,8 +1331,9 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Failed to create canvas context');
 
-      // Update overlay time for export
-      const exportTime = dayjs(parseTime(footage.segments[initialSeekInfo.index].name))
+      const exportTime = dayjs(
+        parseTime(footage.segments[initialSeekInfo.index].name),
+      )
         .add(initialSeekInfo.seconds, 'second')
         .format(timestampFmt);
       overlayRef.current = {
@@ -926,16 +1343,22 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
       };
 
       const fps = 30;
-      const fileName = `${clip.name}-${viewType}.mp4`;
 
-      // 3. Start FFmpeg session (shows save dialog)
       const startResult = await window.electronAPI.exportStart({
-        sessionId, fileName, width, height, fps,
+        sessionId,
+        fileName,
+        width,
+        height,
+        fps,
       });
       if (!startResult.ok) {
         setPlaybackRate(prevPlaybackRate);
-        if (startResult.error !== 'canceled') {
-          setToastMsg(t('toast.exportFailedStart', { error: startResult.error || 'unknown' }));
+        if (!startResult.canceled) {
+          setToastMsg(
+            t('toast.exportFailedStart', {
+              error: startResult.error || 'unknown',
+            }),
+          );
         }
         return;
       }
@@ -947,8 +1370,7 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
       setExportEncoding(false);
       isCancelingRef.current = false;
 
-      // 4. Capture frames at target FPS using deterministic seeks
-      const frameDuration = 1 / fps; // Duration of each frame in seconds
+      const frameDuration = 1 / fps;
       const totalFrames = Math.ceil(exportableSeconds * fps);
 
       const startRealTime = performance.now();
@@ -968,17 +1390,22 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
 
           const realElapsed = (performance.now() - startRealTime) / 1000;
           const now = performance.now();
-          if (frameIndex === 0 || frameIndex === totalFrames - 1 || now - lastUiUpdate >= 120) {
+          if (
+            frameIndex === 0 ||
+            frameIndex === totalFrames - 1 ||
+            now - lastUiUpdate >= 120
+          ) {
             const pct = Math.min(99, (frameIndex / totalFrames) * 100);
             setExportProgress(pct);
             setExportFrameCount(frameIndex);
 
-            // Compute ETA based on real time
             if (frameIndex > 5 && realElapsed > 0) {
               const framesPerSec = frameIndex / realElapsed;
               const remaining = (totalFrames - frameIndex) / framesPerSec;
               if (remaining > 60) {
-                setExportEta(`${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`);
+                setExportEta(
+                  `${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`,
+                );
               } else {
                 setExportEta(`${Math.round(remaining)}s`);
               }
@@ -992,25 +1419,28 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
             footage.duration,
           );
           const frameSeekInfo = await seekExportFrame(targetClipSeconds);
-          const overlayTime = dayjs(parseTime(footage.segments[frameSeekInfo.index].name))
+          const overlayTime = dayjs(
+            parseTime(footage.segments[frameSeekInfo.index].name),
+          )
             .add(frameSeekInfo.seconds, 'second')
             .format(timestampFmt);
-          overlayRef.current = { ...overlayRef.current, time: overlayTime, location: locationText };
+          overlayRef.current = {
+            ...overlayRef.current,
+            time: overlayTime,
+            location: locationText,
+          };
 
-          // Draw and capture frame
           drawFrame(ctx, width, height, viewType, videoHeight);
           const frameBytes = canvasToRgbaBytes(ctx, width, height);
           await window.electronAPI!.exportFrame(sessionId, frameBytes);
 
           frameIndex++;
 
-          // Yield occasionally to keep UI responsive without paying per-frame RAF cost.
           if (frameIndex % 6 === 0) {
             await new Promise((r) => requestAnimationFrame(r));
           }
         }
 
-        // 5. Finish encoding
         setExportProgress(100);
         setExportEta(undefined);
         setExportEncoding(true);
@@ -1030,24 +1460,42 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
         }
       };
 
-      captureLoop().catch((err) => {
+      captureLoop().catch((err: unknown) => {
         console.error('Export loop failed:', err);
         window.electronAPI?.exportCancel(sessionId);
         setExporting(false);
         setPlaying(false);
         setPlaybackRate(prevPlaybackRate);
-        setToastMsg(t('toast.exportError', { error: err.message }));
+        setToastMsg(t('toast.exportError', { error: errText(err) }));
       });
-    } catch (e: any) {
+    } catch (e) {
       console.error('Export start failed', e);
       setExporting(false);
       setPlaybackRate(prevPlaybackRate);
-      setToastMsg(t('toast.exportFailedStart', { error: e.message }));
+      setToastMsg(t('toast.exportFailedStart', { error: errText(e) }));
     }
   }, [
-    clip.name, footage, clipPlayedSeconds, exportIn, exportSelectionSeconds,
-    exportableSeconds, exporting, playbackRate, drawFrame, locationText,
-    resolveCanvasSize, viewType, t, timestampFmt, seekExportFrame, waitForLayoutCommit,
+    clip.name,
+    footage,
+    clipPlayedSeconds,
+    exportIn,
+    exportSelectionSeconds,
+    exportableSeconds,
+    exporting,
+    playbackRate,
+    drawFrame,
+    locationText,
+    resolveCanvasSize,
+    viewType,
+    t,
+    timestampFmt,
+    seekExportFrame,
+    waitForLayoutCommit,
+    canUseComposeExport,
+    buildComposeSegments,
+    buildDriveWindows,
+    exportSettings,
+    formatTime,
   ]);
 
   // ── Map Links ──
@@ -1059,35 +1507,53 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
   // ── Grid CSS class ──
   const gridClass = useMemo(() => {
     switch (viewType) {
-      case 'grid6': return 'grid grid-cols-3 grid-rows-2';
-      case 'grid4': return 'grid grid-cols-2 grid-rows-2';
-      case 'grid4old': return 'flex flex-col';
-      default: return 'flex items-center justify-center';
+      case 'grid6':
+        return 'grid grid-cols-3 grid-rows-2';
+      case 'grid4':
+        return 'grid grid-cols-2 grid-rows-2';
+      case 'grid4old':
+        return 'flex flex-col';
+      default:
+        return 'flex items-center justify-center';
     }
   }, [viewType]);
 
   // ── Render helpers for each layout ──
-  const renderPlayer = useCallback((cam: CamName, extraClass?: string) => (
-    <Player
-      key={cam}
-      videoRef={refMap[cam]}
-      url={segment[cam]}
-      playing={playing}
-      playbackRate={playbackRate}
-      full={isSingleView && viewType === cam}
-      className={extraClass}
-      label={isSingleView ? undefined : CAM_LABELS[cam]}
-      onChangeState={handleChangeState}
-      unique={cam}
-      index={segmentIndex}
-      onDoubleClick={() =>
-        setViewType(isSingleView ? (hasPillarCams ? 'grid6' : 'grid4') : cam)
-      }
-    />
-  ), [segment, playing, playbackRate, isSingleView, viewType, handleChangeState, segmentIndex, refMap, hasPillarCams]);
+  const renderPlayer = useCallback(
+    (cam: CamName, extraClass?: string) => (
+      <Player
+        key={cam}
+        videoRef={refMap[cam]}
+        url={segment[cam]}
+        playing={playing}
+        playbackRate={playbackRate}
+        full={isSingleView && viewType === cam}
+        className={extraClass}
+        label={isSingleView ? undefined : CAM_LABELS[cam]}
+        onChangeState={handleChangeState}
+        unique={cam}
+        index={segmentIndex}
+        onDoubleClick={() =>
+          setViewType(isSingleView ? (hasPillarCams ? 'grid6' : 'grid4') : cam)
+        }
+      />
+    ),
+    [
+      segment,
+      playing,
+      playbackRate,
+      isSingleView,
+      viewType,
+      handleChangeState,
+      segmentIndex,
+      refMap,
+      hasPillarCams,
+      setViewType,
+    ],
+  );
 
   return (
-    <div className="animate-fade-in flex h-full min-h-0 flex-col gap-3">
+    <div className="animate-fade-in relative flex h-full min-h-0 flex-col gap-3">
       <Toast message={toastMsg} onClose={() => setToastMsg(null)} />
       <ExportModal
         open={exporting}
@@ -1097,12 +1563,6 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
         encoding={exportEncoding}
         onCancel={cancelExport}
       />
-
-      {/* Header Overlays */}
-      <div className="pointer-events-none absolute top-6 left-6 z-20 flex flex-col gap-1 drop-shadow-lg">
-        <div className="text-2xl font-bold tracking-wide text-white">{formatTime}</div>
-        <div className="text-base font-medium text-neutral-300">{locationText}</div>
-      </div>
 
       <div className="absolute top-6 right-6 z-20 flex items-center gap-2">
         {mapLinks.map((link) => (
@@ -1139,7 +1599,7 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
         >
           {t('viewer.snapshot')}
         </button>
-        {hasMetadata && (
+        {hasRealMetadata && (
           <button
             onClick={exportCSV}
             className="glass-panel rounded-md px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 hover:text-white"
@@ -1151,9 +1611,6 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
 
       {/* Main Stage */}
       <div className="relative flex-1 overflow-hidden rounded-xl bg-black shadow-2xl ring-1 ring-white/10">
-        {/* Dashboard overlay (right side) */}
-        <Dashboard data={currentSEI} hasMetadata={hasMetadata} />
-
         {/* Video Grid */}
         <div className={clsx('h-full w-full', gridClass)}>
           {viewType === 'grid6' && (
@@ -1217,8 +1674,17 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
         </div>
       </div>
 
+      {/* Driving telemetry strip */}
+      <Dashboard
+        data={currentSEI}
+        hasMetadata={hasMetadata}
+        timeText={formatTime}
+        locationText={locationText}
+        variant="bar"
+      />
+
       {/* View Switcher */}
-      <div className="flex justify-center gap-1.5 flex-wrap">
+      <div className="flex flex-wrap justify-center gap-1.5">
         {availableLayouts.map((opt) => (
           <button
             key={opt.id}
@@ -1247,7 +1713,7 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
               mark={eventSeconds}
               exportIn={exportIn}
               exportOut={exportOut}
-              speedData={footage.seiData}
+              speedData={seiSeries}
               onChange={seek}
             />
           </div>
@@ -1285,7 +1751,10 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
               </button>
               {(exportIn !== undefined || exportOut !== undefined) && (
                 <button
-                  onClick={() => { setExportIn(undefined); setExportOut(undefined); }}
+                  onClick={() => {
+                    setExportIn(undefined);
+                    setExportOut(undefined);
+                  }}
                   className="rounded px-1.5 py-1 text-[10px] text-neutral-600 hover:text-neutral-300"
                   title={t('viewer.clearInOut')}
                 >
@@ -1354,10 +1823,13 @@ export function Viewer({ clip, footage, onFootageUpdate, onDelete }: Props) {
           <span className="cursor-default text-[10px] text-neutral-600 transition-colors group-hover/kb:text-neutral-400">
             ⌨
           </span>
-          <div className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-900 px-4 py-2 shadow-xl ring-1 ring-white/10 group-hover/kb:block">
+          <div className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-2 hidden -translate-x-1/2 rounded-lg bg-neutral-900 px-4 py-2 whitespace-nowrap shadow-xl ring-1 ring-white/10 group-hover/kb:block">
             <div className="flex gap-4 text-[10px] text-neutral-400">
               <span>{t('viewer.hint.playPause')}</span>
               <span>{t('viewer.hint.seek')}</span>
+              <span>{t('viewer.hint.fineSeek')}</span>
+              <span>{t('viewer.hint.frameStep')}</span>
+              <span>{t('viewer.hint.clipNav')}</span>
               <span>M: {t('viewer.mute')}</span>
               <span>{t('viewer.hint.fullscreen')}</span>
               <span>{t('viewer.hint.pip')}</span>

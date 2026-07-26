@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import {
   VscChromeClose,
   VscChromeMaximize,
   VscChromeMinimize,
   VscGear,
 } from 'react-icons/vsc';
-import { useState } from 'react';
+
 import { useI18n } from '../i18n';
 import { Settings } from './Settings';
 import { TslMark } from './TslMark';
@@ -35,7 +36,9 @@ export function TitleBar() {
       <div className="flex flex-1 items-center gap-2 px-3 text-xs font-medium text-neutral-500 [-webkit-app-region:drag]">
         <TslMark size="sm" />
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-semibold tracking-[0.28em] text-white/85">TSL</span>
+          <span className="text-[10px] font-semibold tracking-[0.28em] text-white/85">
+            TSL
+          </span>
           <span className="text-neutral-500/80">{t('titleBar.title')}</span>
         </div>
       </div>
