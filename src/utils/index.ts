@@ -1,6 +1,7 @@
 export * from './calcEventSeconds';
 export * from './calcSeekInfo';
 export * from './correctNum';
+export * from './detectIncidents';
 export * from './formatDuration';
 export * from './genClips';
 export * from './genFootage';

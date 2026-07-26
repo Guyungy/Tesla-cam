@@ -78,13 +78,31 @@ export function Settings({ open, onClose }: Props) {
             <label className="mb-3 block text-sm font-medium text-neutral-400">
               {t('settings.playback')}
             </label>
-            <ToggleRow
-              label={t('settings.autoAdvance')}
-              checked={appSettings.autoAdvance}
-              onToggle={() =>
-                setAppSettings({ autoAdvance: !appSettings.autoAdvance })
-              }
-            />
+            <div className="flex flex-col gap-2.5">
+              <ToggleRow
+                label={t('settings.autoAdvance')}
+                checked={appSettings.autoAdvance}
+                onToggle={() =>
+                  setAppSettings({ autoAdvance: !appSettings.autoAdvance })
+                }
+              />
+              <ToggleRow
+                label={t('settings.autoSeekEvent')}
+                checked={appSettings.autoSeekEvent}
+                onToggle={() =>
+                  setAppSettings({ autoSeekEvent: !appSettings.autoSeekEvent })
+                }
+              />
+              <ToggleRow
+                label={t('settings.sentryCameraFocus')}
+                checked={appSettings.sentryCameraFocus}
+                onToggle={() =>
+                  setAppSettings({
+                    sentryCameraFocus: !appSettings.sentryCameraFocus,
+                  })
+                }
+              />
+            </div>
           </div>
 
           {/* Divider */}

@@ -7,6 +7,10 @@ export type AppSettings = {
   autoAdvance: boolean;
   /** Last layout the user picked — restored for new clips when available */
   preferredView: ViewType | null;
+  /** Jump to just before the recorded event when opening an event clip */
+  autoSeekEvent: boolean;
+  /** Open Sentry clips focused on the camera that triggered the event */
+  sentryCameraFocus: boolean;
 };
 
 const STORAGE_KEY = 'tesla-cam-app-settings';
@@ -14,6 +18,8 @@ const STORAGE_KEY = 'tesla-cam-app-settings';
 const DEFAULTS: AppSettings = {
   autoAdvance: true,
   preferredView: null,
+  autoSeekEvent: true,
+  sentryCameraFocus: true,
 };
 
 // ── Tiny external store (same pattern as useExportSettings) ──

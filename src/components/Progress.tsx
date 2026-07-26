@@ -10,6 +10,10 @@ type Props = {
   exportIn?: number;
   exportOut?: number;
   speedData?: SEIDataPoint[];
+  /** Hard-braking incident positions (clip seconds) shown as warning marks */
+  warnMarks?: number[];
+  /** Tooltip for warning marks */
+  warnLabel?: string;
   onChange?: (val: number) => void;
 };
 
@@ -20,6 +24,8 @@ export function Progress({
   exportIn,
   exportOut,
   speedData,
+  warnMarks,
+  warnLabel,
   onChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -177,6 +183,20 @@ export function Progress({
             className="absolute -top-1 -bottom-1 w-1 rounded-sm bg-red-600"
             style={{ left: `${markPercent}%` }}
           />
+        )}
+
+        {/* Hard-braking warning marks (amber triangles above the track) */}
+        {warnMarks?.map(
+          (s, i) =>
+            s >= 0 &&
+            s <= max && (
+              <div
+                key={i}
+                title={warnLabel}
+                className="absolute -top-2.5 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[7px] border-x-transparent border-t-amber-400 drop-shadow"
+                style={{ left: `${(s / max) * 100}%` }}
+              />
+            ),
         )}
 
         {/* IN/OUT markers */}
