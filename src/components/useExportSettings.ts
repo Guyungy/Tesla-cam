@@ -1,11 +1,21 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
+/** Widest video export. Screenshots always use full quality. */
+export const VIDEO_WIDTH_OPTIONS = [3840, 2880, 1920] as const;
+export type VideoMaxWidth = (typeof VIDEO_WIDTH_OPTIONS)[number];
+
 export type ExportSettings = {
   showTime: boolean;
   showLocation: boolean;
   showDriveData: boolean;
   /** Prefer a hardware H.264 encoder when the machine has one (much faster) */
   hwAccel: boolean;
+  /**
+   * Video export width. Matching the screenshot (3840) doubles both file size
+   * and encode time versus 2880 — measured at 135 MB / 37 s vs 61 MB / 16 s
+   * for the same 24 s clip — so it is worth being able to trade down.
+   */
+  videoMaxWidth: VideoMaxWidth;
 };
 
 const STORAGE_KEY = 'tesla-cam-export-settings';
@@ -15,6 +25,9 @@ const DEFAULTS: ExportSettings = {
   showLocation: true,
   showDriveData: false,
   hwAccel: true,
+  // Defaults to screenshot parity, which is what was asked for; the option
+  // exists to trade resolution back for size and encode time.
+  videoMaxWidth: 3840,
 };
 
 // ── Tiny external store (avoids React context + provider boilerplate) ──

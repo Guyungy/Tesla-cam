@@ -51,16 +51,46 @@ export function Player({
     });
   }, [index, updateState, url]);
 
+  // Bumped whenever we pause or a new source loads, so a play() promise that
+  // resolves late can tell it has been superseded.
+  const playTokenRef = useRef(0);
+
   const syncPlaying = useCallback(() => {
-    if (videoRef.current && videoRef.current.src && !state.current.ended) {
-      if (playing) {
-        videoRef.current.play();
-      } else {
-        videoRef.current.pause();
-      }
+    const video = videoRef.current;
+    if (!video || !video.src || state.current.ended) return;
+
+    if (!playing) {
+      playTokenRef.current++;
+      video.pause();
+      return;
     }
+    // play() flips `paused` synchronously, so this also collapses the repeated
+    // calls coming from the loadstart / seeking / effect paths.
+    if (!video.paused) return;
+
+    const token = ++playTokenRef.current;
+    void video.play().catch((error: unknown) => {
+      // Switching segment or clip swaps all six sources at once, which aborts
+      // every pending play(). That is expected — only surface a real failure.
+      if (token !== playTokenRef.current) return;
+      const name = (error as Error)?.name;
+      if (name === 'AbortError' || name === 'NotAllowedError') return;
+      console.warn('[Player] play() failed', error);
+    });
   }, [playing, videoRef]);
   useEffect(syncPlaying, [syncPlaying]);
+
+  // Release the previous source before the next one is attached. Six
+  // 2896x1876 streams re-sourced while still decoding is what makes the
+  // media stack thrash on segment changes.
+  useEffect(() => {
+    const video = videoRef.current;
+    const playToken = playTokenRef;
+    return () => {
+      playToken.current++;
+      if (video && !video.paused) video.pause();
+    };
+  }, [url, videoRef]);
 
   const syncPlaybackRate = useCallback(() => {
     if (videoRef.current) {

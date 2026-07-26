@@ -68,6 +68,33 @@ function validateComposeRequest(req: ComposeExportRequest): string | null {
   return null;
 }
 
+/**
+ * Whether the Recycle Bin actually works at a given location.
+ *
+ * Removable / exFAT volumes — i.e. every real TeslaCam USB drive — have no
+ * Recycle Bin, and `shell.trashItem` fails for every single file there. The
+ * only way to know is to try it, so probe once with a throwaway file in the
+ * same directory and let the confirmation dialog say what will really happen.
+ */
+async function recycleBinWorksFor(samplePath: string): Promise<boolean> {
+  const probe = path.join(
+    path.dirname(samplePath),
+    `.teslacam-trash-probe-${process.pid}-${Date.now()}`,
+  );
+  try {
+    await fsPromises.writeFile(probe, '');
+  } catch {
+    return false; // not writable — trashing cannot work either
+  }
+  try {
+    await shell.trashItem(probe);
+    return true;
+  } catch {
+    await fsPromises.rm(probe, { force: true }).catch(() => {});
+    return false;
+  }
+}
+
 type ExportSession = {
   outputPath: string;
   frameCount: number;
@@ -141,6 +168,35 @@ if (!app.isPackaged) {
   );
 }
 
+/**
+ * The Tesla mark the compose overlay draws in its info bar. Shipped in the
+ * renderer bundle (`dist/`) so it exists in both dev and packaged builds;
+ * returns undefined when missing so the export just omits the glyph.
+ */
+function resolveOverlayIcon(): string | undefined {
+  const candidate = path.join(__dirname, '../dist/tesla-icon.png');
+  try {
+    return fs.statSync(candidate).isFile() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Window/taskbar icon. Packaged Windows builds use the executable's icon. */
+function resolveWindowIcon(): string | undefined {
+  for (const candidate of [
+    path.join(__dirname, '../dist/favicon.ico'),
+    path.join(__dirname, '../build/icon.png'),
+  ]) {
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* try the next one */
+    }
+  }
+  return undefined;
+}
+
 function getFFmpegPath(): string {
   const ffmpegStatic = require('ffmpeg-static') as string;
   if (app.isPackaged && ffmpegStatic.includes('app.asar')) {
@@ -190,6 +246,52 @@ function testEncoder(encoder: string): Promise<boolean> {
   });
 }
 
+/**
+ * Frame rate of a source file, read from ffmpeg's stream line.
+ *
+ * Tesla footage is not 30 fps: current firmware records ~36 fps and older
+ * clips ~24. Encoding either at a hardcoded 30 resamples every frame —
+ * dropping ~1 frame in 6 from 36 fps footage, which matters when the export is
+ * being used as evidence. Returns null when it cannot be determined.
+ */
+function detectSourceFps(filePath: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v: number | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    const proc = spawn(getFFmpegPath(), ['-hide_banner', '-i', filePath], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+    let err = '';
+    proc.stderr?.on('data', (c: Buffer) => {
+      err += c.toString();
+      if (err.length > 8000) err = err.slice(-8000);
+    });
+    const timer = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+      finish(null);
+    }, 8000);
+    proc.on('error', () => {
+      clearTimeout(timer);
+      finish(null);
+    });
+    proc.on('close', () => {
+      clearTimeout(timer);
+      const m = err.match(/([\d.]+)\s*fps/);
+      const v = m ? Number(m[1]) : NaN;
+      finish(Number.isFinite(v) && v >= 1 && v <= 240 ? v : null);
+    });
+  });
+}
+
 function detectHwEncoder(): Promise<string | null> {
   if (!hwEncoderPromise) {
     hwEncoderPromise = (async () => {
@@ -225,6 +327,7 @@ const createWindow = () => {
     },
     autoHideMenuBar: true,
     backgroundColor: '#0a0a0a',
+    icon: resolveWindowIcon(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       // Security: renderer must not get Node integration.
@@ -321,86 +424,69 @@ app.on('ready', () => {
         return { ok: false, error: 'No files to delete' };
       }
 
+      const recycleBin = await recycleBinWorksFor(uniquePaths[0]);
+      const count = uniquePaths.length;
+
+      // One dialog that states the real outcome. Asking "move to Recycle Bin?"
+      // and only then revealing that permanent deletion is the sole option
+      // turns the unrecoverable path into a default on removable drives.
       const { response } = await dialog.showMessageBox(win, {
         type: 'warning',
-        buttons: ['Delete', 'Cancel'],
+        buttons: [
+          recycleBin ? 'Move to Recycle Bin' : 'Delete Permanently',
+          'Cancel',
+        ],
         defaultId: 1,
         cancelId: 1,
+        noLink: true,
         title: 'Delete clip?',
-        message: `Move "${clipName}" to the Recycle Bin?`,
-        detail: `This will remove ${uniquePaths.length} file(s) from the current clip. You can restore them from the Recycle Bin if needed.`,
+        message: recycleBin
+          ? `Move "${clipName}" to the Recycle Bin?`
+          : `Permanently delete "${clipName}"?`,
+        detail: recycleBin
+          ? `${count} file(s) will be moved to the Recycle Bin, and can be restored from there.`
+          : `This drive has no Recycle Bin, so all ${count} file(s) will be erased immediately.\n\n` +
+            'This cannot be undone.',
       });
 
       if (response !== 0) {
         return { ok: false, canceled: true };
       }
 
-      let trashedCount = 0;
+      let removed = 0;
       const errors: string[] = [];
       for (const filePath of uniquePaths) {
         try {
-          await fsPromises.access(filePath);
-          await shell.trashItem(filePath);
-          trashedCount++;
+          if (recycleBin) {
+            await fsPromises.access(filePath);
+            await shell.trashItem(filePath);
+          } else {
+            await fsPromises.rm(filePath, { recursive: true, force: true });
+          }
+          removed++;
         } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          errors.push(`${filePath}: ${message}`);
-          console.warn(`[Delete] Skipped ${filePath}:`, error);
+          errors.push(`${path.basename(filePath)}: ${errMsg(error)}`);
+          console.warn(`[Delete] Failed for ${filePath}:`, error);
         }
       }
 
-      if (trashedCount > 0) {
-        return { ok: true, trashedCount };
-      }
-
-      const { response: permanentDeleteResponse } = await dialog.showMessageBox(
-        win,
-        {
-          type: 'warning',
-          buttons: ['Delete Permanently', 'Cancel'],
-          defaultId: 1,
-          cancelId: 1,
-          title: 'Recycle Bin unavailable',
-          message: `Could not move "${clipName}" to the Recycle Bin.`,
-          detail:
-            'The files may still be locked, or this drive may not support the Recycle Bin.\n\n' +
-            'Do you want to permanently delete the clip instead?',
-        },
-      );
-
-      if (permanentDeleteResponse !== 0) {
-        return {
-          ok: false,
-          canceled: true,
-          error: errors.at(0) || 'No files were moved to trash',
-        };
-      }
-
-      let deletedCount = 0;
-      for (const filePath of uniquePaths) {
-        try {
-          await fsPromises.rm(filePath, { recursive: true, force: true });
-          deletedCount++;
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          errors.push(`${filePath}: ${message}`);
-          console.warn(
-            `[Delete] Permanent delete failed for ${filePath}:`,
-            error,
-          );
-        }
-      }
-
-      if (deletedCount === 0) {
+      if (removed === 0) {
         return {
           ok: false,
           error: errors.at(0) || 'No files were deleted',
+          failedCount: errors.length,
         };
       }
 
-      return { ok: true, trashedCount: deletedCount };
+      // A partial delete still updates the sidebar, but must not be reported
+      // as clean — leftover files would otherwise disappear silently.
+      return {
+        ok: true,
+        trashedCount: removed,
+        failedCount: errors.length,
+        permanent: !recycleBin,
+        error: errors.at(0),
+      };
     },
   );
 
@@ -426,13 +512,31 @@ app.on('ready', () => {
 
       const ffmpegPath = getFFmpegPath();
 
+      // Match the source frame rate unless the renderer pinned one.
+      let effectiveReq = req;
+      if (!(typeof req.fps === 'number' && req.fps > 0)) {
+        const firstSource = req.segments
+          .flatMap((seg) => Object.values(seg.paths))
+          .find((p): p is string => !!p);
+        const sourceFps = firstSource
+          ? await detectSourceFps(firstSource)
+          : null;
+        effectiveReq = { ...req, fps: sourceFps ?? 30 };
+        console.log(
+          `[ComposeExport] source fps ${sourceFps ?? 'unknown'} → encoding at ${effectiveReq.fps}`,
+        );
+      }
+
       /** Run one encode attempt with the given encoder. */
       const runAttempt = async (
         encoder: string,
       ): Promise<ComposeExportResult> => {
         let prepared;
         try {
-          prepared = prepareComposeExport(req, filePath, { encoder });
+          prepared = prepareComposeExport(effectiveReq, filePath, {
+            encoder,
+            iconPath: resolveOverlayIcon(),
+          });
         } catch (e) {
           return { ok: false, error: errMsg(e) || 'Failed to prepare export' };
         }

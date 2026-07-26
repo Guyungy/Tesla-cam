@@ -1,7 +1,9 @@
 export * from './calcEventSeconds';
 export * from './calcSeekInfo';
 export * from './correctNum';
+export * from './deleteResultToast';
 export * from './detectIncidents';
+export * from './exportLayout';
 export * from './formatDuration';
 export * from './genClips';
 export * from './genFootage';
@@ -11,4 +13,5 @@ export * from './parseSEI';
 export * from './parseTime';
 export * from './probeMp4Duration';
 export * from './readEvent';
+export * from './shareInflight';
 export * from './types';

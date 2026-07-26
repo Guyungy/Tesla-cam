@@ -17,10 +17,14 @@ import {
   type CamClip,
   type CamFootage,
   type CamName,
+  type DeleteResult,
+  deleteResultToast,
   formatDuration,
   genAllMapLinks,
   parseTime,
   type PlayerState,
+  resolveExportCanvasSize,
+  resolveOverlayBarLayout,
   type SeekInfo,
   type ViewType,
 } from '../utils';
@@ -42,14 +46,11 @@ type Props = {
   footage: CamFootage;
   /** Callback to update footage with SEI data once loaded */
   onFootageUpdate?: (footage: CamFootage) => void;
-  onDelete?: (
-    clip: CamClip,
-  ) => Promise<{ ok: boolean; canceled?: boolean; error?: string } | undefined>;
+  onDelete?: (clip: CamClip) => Promise<DeleteResult | undefined>;
   /** Fired once when playback reaches the end of the whole clip */
   onClipEnded?: () => void;
 };
 
-const SINGLE_EXPORT_MAX_WIDTH = 3840;
 const TESLA_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M40 2L10 2C9.445 2 9 2.449 9 3L9 47C9 47.551 9.445 48 10 48L40 48C40.555 48 41 47.551 41 47L41 3C41 2.449 40.555 2 40 2ZM23.137 10.094C24.375 10.063 25.625 10.063 26.867 10.094C30.074 10.176 33.285 10.515 36.309 11.539L35.633 12.531C33.074 11.633 30.035 11.199 26.828 11.105C25.617 11.066 24.383 11.066 23.172 11.105C19.965 11.199 16.93 11.633 14.367 12.531L13.695 11.539C16.719 10.515 19.926 10.176 23.137 10.094ZM17.086 37.078C17.02 37.359 16.793 37.594 16.484 37.715L15.547 37.715L15.492 37.738L15.492 40.27L14.906 40.27L14.906 37.738L14.859 37.715L13.922 37.715C13.613 37.594 13.387 37.359 13.32 37.078L13.32 37.074L17.086 37.074ZM21.34 40.266L19.113 40.266C18.801 40.141 18.57 39.906 18.508 39.625L21.941 39.625C21.879 39.906 21.652 40.141 21.34 40.266ZM21.34 38.965L19.113 38.965C18.801 38.844 18.57 38.605 18.508 38.328L21.941 38.328C21.879 38.605 21.652 38.844 21.34 38.965ZM21.34 37.727L19.113 37.727C18.801 37.602 18.57 37.367 18.508 37.086L21.941 37.086C21.879 37.367 21.652 37.602 21.34 37.727ZM26.867 40.27L23.617 40.27L23.629 40.246C23.691 39.965 23.918 39.75 24.223 39.625L26.289 39.625L26.289 38.965L23.617 38.965L23.617 37.078L26.852 37.078C26.785 37.359 26.559 37.609 26.25 37.703L24.191 37.703L24.191 38.336L26.867 38.336ZM31.16 40.246L28.523 40.238L28.523 37.078L29.102 37.074L29.098 39.617L31.668 39.617C31.605 39.883 31.449 40.113 31.16 40.246ZM28.453 13.633L25 32.164L21.547 13.633C19.699 13.633 17.781 13.918 17.73 15.277C16.863 15.059 15.281 14.074 14.918 13.383C17.555 12.316 21.902 12.176 23.789 12.246L25 13.8L26.211 12.246C28.098 12.176 32.449 12.316 35.086 13.383C34.719 14.074 33.137 15.059 32.266 15.277C32.219 13.918 30.297 13.633 28.453 13.633ZM36.602 40.258L36.027 40.258L36.027 38.969L33.934 38.969L33.934 40.258L33.355 40.258L33.355 38.32L36.602 38.324ZM36.086 37.711L33.859 37.711C33.547 37.586 33.305 37.363 33.246 37.082L36.68 37.082C36.617 37.363 36.398 37.586 36.086 37.711Z" fill="white"/></svg>`;
 const TESLA_ICON_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(TESLA_ICON_SVG)}`;
 
@@ -655,14 +656,14 @@ export function Viewer({
         ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.fillRect(0, barY, width, 1);
 
+        // Metrics come from the same helper that sized the bar, so the stack
+        // (padding · brand · gap · timestamp · padding) always fits inside it.
+        const { padding, brandSize, titleSize, subSize, gap, iconSize } =
+          resolveOverlayBarLayout(scale);
         const hPad = Math.round(22 * scale);
-        const brandSize = Math.max(9, Math.round(11 * scale));
-        const titleSize = Math.max(16, Math.round(28 * scale));
-        const subSize = Math.max(12, Math.round(15 * scale));
-        const iconSize = Math.max(22, Math.round(30 * scale));
         const leftTextX = hPad + iconSize + Math.round(16 * scale);
-        const brandY = barY + Math.max(15, Math.round(18 * scale));
-        const titleY = barY + barHeight - Math.max(11, Math.round(14 * scale));
+        const brandY = barY + padding;
+        const titleTop = brandY + brandSize + gap;
 
         const iconImage = teslaIconRef.current;
         if (iconImage?.complete) {
@@ -687,7 +688,7 @@ export function Viewer({
 
           ctx.fillStyle = '#fafafa';
           ctx.font = `700 ${titleSize}px "Aptos Display", "Segoe UI Variable Display", "Segoe UI", sans-serif`;
-          ctx.fillText(time, leftTextX, titleY - titleSize);
+          ctx.fillText(time, leftTextX, titleTop);
         }
 
         if (sett.showLocation) {
@@ -714,63 +715,32 @@ export function Viewer({
   );
 
   /**
-   * Resolve export canvas size.
-   * Multi-grid layouts export at 3840×2160 (4K).
-   * Single camera exports use the native video resolution, capped at 3840 wide.
-   * Adds a bottom bar for time/location info (60-80px).
+   * Resolve export canvas size. Grid layouts are capped at 4K wide instead of
+   * multiplying the native source size (6-grid from 2896x1876 footage was
+   * allocating 8688x3812 — 33 MP, ~1 s per JPEG encode). Geometry and the
+   * bottom-bar height live in resolveExportCanvasSize so they stay in sync
+   * with drawFrame and are covered by tests.
    */
-  const resolveCanvasSize = useCallback(() => {
-    const visibleVideoRefs = visibleCams
-      .map((cam) => refMap[cam]?.current)
-      .filter(
-        (video): video is HTMLVideoElement =>
-          !!video?.videoWidth && !!video?.videoHeight,
-      );
-    const baseVideo =
-      visibleVideoRefs[0] || frontRef.current || backRef.current;
-    const fallbackWidth = 1280;
-    const fallbackHeight = 720;
-    const baseWidth = baseVideo?.videoWidth || fallbackWidth;
-    const baseHeight = baseVideo?.videoHeight || fallbackHeight;
+  const resolveCanvasSize = useCallback(
+    (maxWidth?: number) => {
+      const visibleVideoRefs = visibleCams
+        .map((cam) => refMap[cam]?.current)
+        .filter(
+          (video): video is HTMLVideoElement =>
+            !!video?.videoWidth && !!video?.videoHeight,
+        );
+      const baseVideo =
+        visibleVideoRefs[0] || frontRef.current || backRef.current;
 
-    // Bottom bar height for time/location overlay
-    const bottomBarHeight = 60;
-
-    switch (viewType) {
-      case 'grid6': {
-        // 3×2 grid follows source video size
-        const w = baseWidth * 3;
-        const h = baseHeight * 2 + bottomBarHeight;
-        return { width: w, height: h, videoHeight: baseHeight * 2 };
-      }
-      case 'grid4': {
-        // 2×2 grid follows source video size
-        const w = baseWidth * 2;
-        const h = baseHeight * 2 + bottomBarHeight;
-        return { width: w, height: h, videoHeight: baseHeight * 2 };
-      }
-      case 'grid4old': {
-        // Classic layout follows source video size
-        const w = baseWidth * 3;
-        const h = baseHeight * 2 + bottomBarHeight;
-        return { width: w, height: h, videoHeight: baseHeight * 2 };
-      }
-      default: {
-        // Single camera: use native resolution, capped at 3840 wide
-        let w = baseWidth;
-        let h = baseHeight;
-        if (w > SINGLE_EXPORT_MAX_WIDTH) {
-          const scale = SINGLE_EXPORT_MAX_WIDTH / w;
-          w = SINGLE_EXPORT_MAX_WIDTH;
-          h = Math.round(baseHeight * scale);
-        }
-        // H.264 requires even dimensions
-        w = w % 2 === 0 ? w : w + 1;
-        h = h % 2 === 0 ? h : h + 1;
-        return { width: w, height: h + bottomBarHeight, videoHeight: h };
-      }
-    }
-  }, [viewType, refMap, visibleCams]);
+      return resolveExportCanvasSize({
+        viewType,
+        sourceWidth: baseVideo?.videoWidth || 1280,
+        sourceHeight: baseVideo?.videoHeight || 720,
+        maxWidth,
+      });
+    },
+    [viewType, refMap, visibleCams],
+  );
 
   // ── Video Export (compose fast path + canvas fallback) ──
   const setOverlayTimeLocation = useCallback(
@@ -942,7 +912,8 @@ export function Viewer({
         return;
       }
       if (result?.ok) {
-        setToastMsg(t('toast.clipDeleted'));
+        const toast = deleteResultToast(result);
+        setToastMsg(t(toast.key, toast.params));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown';

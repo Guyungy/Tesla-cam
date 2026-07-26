@@ -120,12 +120,19 @@ function regionLuma(file: string, crop: string, at: number): number {
 
 // ── Argument construction (fast, no encoding) ──
 
-const LAYOUT_SIZES: Record<string, { w: number; h: number }> = {
-  grid6: { w: 2880, h: 1140 },
-  grid4: { w: 1920, h: 1140 },
-  grid4old: { w: 2880, h: 1140 },
-  front: { w: 1920, h: 1140 },
+const LAYOUT_WIDTHS: Record<string, number> = {
+  grid6: 2880,
+  grid4: 1920,
+  grid4old: 2880,
+  front: 1920,
 };
+
+/** The graph now lives in a file; read it back to assert on its contents. */
+function graphOf(prepared: { args: string[] }): string {
+  const i = prepared.args.indexOf('-filter_complex_script');
+  expect(i, 'filtergraph must be passed as a script file').toBeGreaterThan(-1);
+  return fs.readFileSync(prepared.args[i + 1], 'utf8');
+}
 
 for (const viewType of ['grid6', 'grid4', 'grid4old', 'front'] as const) {
   test(`prepare args: ${viewType}`, () => {
@@ -133,12 +140,14 @@ for (const viewType of ['grid6', 'grid4', 'grid4old', 'front'] as const) {
       makeRequest(viewType),
       path.join(tmpRoot, 'x.mp4'),
     );
-    expect(prepared.width).toBe(LAYOUT_SIZES[viewType].w);
-    expect(prepared.height).toBe(LAYOUT_SIZES[viewType].h);
+    expect(prepared.width).toBe(LAYOUT_WIDTHS[viewType]);
     expect(prepared.width % 2).toBe(0);
     expect(prepared.height % 2).toBe(0);
+    // The info bar is derived from its contents, so it must leave room for the
+    // timestamp rather than being a fixed 60px the text overflows.
+    expect(prepared.height).toBeGreaterThan(1080);
 
-    const fc = prepared.args[prepared.args.indexOf('-filter_complex') + 1];
+    const fc = graphOf(prepared);
     if (viewType === 'grid6') expect(fc).toContain('xstack=inputs=6');
     if (viewType === 'grid4') expect(fc).toContain('xstack=inputs=4');
     if (viewType === 'grid4old') expect(fc).toContain('hstack=inputs=3');
@@ -148,6 +157,8 @@ for (const viewType of ['grid6', 'grid4', 'grid4old', 'front'] as const) {
     expect(fc).toContain('pts\\:localtime');
     expect(fc).toContain('textfile=');
     expect(fc).toContain('expansion=none');
+    // Info bar is painted, not left as bare padding
+    expect(fc).toContain('drawbox=');
     if (prepared.tmpDir)
       fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
   });
@@ -166,10 +177,35 @@ test('throws when no source files overlap the export range', () => {
 
 // ── Full FFmpeg smoke per layout ──
 
+/**
+ * Explicit geometry so the overlay's positions are known in the assertions —
+ * this is also the path the app takes, since the renderer always sends layout.
+ */
+function testLayout(viewType: string) {
+  return {
+    width: LAYOUT_WIDTHS[viewType],
+    videoHeight: 1080,
+    barHeight: 120,
+    height: 1200,
+    scale: 2,
+    padding: 16,
+    brandSize: 22,
+    titleSize: 56,
+    subSize: 30,
+    gap: 8,
+    iconSize: 60,
+    hPad: 44,
+    leftTextX: 136,
+  };
+}
+
 for (const viewType of ['grid6', 'grid4', 'grid4old', 'front'] as const) {
   test(`ffmpeg smoke: ${viewType}`, () => {
     const out = path.join(tmpRoot, `smoke-${viewType}.mp4`);
-    const prepared = prepareComposeExport(makeRequest(viewType), out);
+    const prepared = prepareComposeExport(
+      makeRequest(viewType, { layout: testLayout(viewType) }),
+      out,
+    );
 
     const r = spawnSync(ffmpeg, prepared.args, {
       encoding: 'utf8',
@@ -190,11 +226,28 @@ for (const viewType of ['grid6', 'grid4', 'grid4old', 'front'] as const) {
     expect(dec.status).toBe(0);
     expect(dec.stderr.trim()).toBe('');
 
-    const H = prepared.height;
-    // Timestamp clock (y = h-60+18, fontsize 22) — must not be blank
-    expect(regionLuma(out, `600:24:0:${H - 44}`, 1)).toBeGreaterThan(18);
-    // Location line (y = h-60+40, fontsize 18) — apostrophe/%/CJK text
-    expect(regionLuma(out, `600:22:0:${H - 22}`, 1)).toBeGreaterThan(18);
+    const L = testLayout(viewType);
+    const barY = L.videoHeight;
+    const brandY = barY + L.padding;
+    const titleY = brandY + L.brandSize + L.gap;
+    // Brand line, then the timestamp beneath it — both inside the bar.
+    expect(
+      regionLuma(out, `300:${L.brandSize}:${L.leftTextX}:${brandY}`, 1),
+    ).toBeGreaterThan(18);
+    expect(
+      regionLuma(out, `700:${L.titleSize}:${L.leftTextX}:${titleY}`, 1),
+    ).toBeGreaterThan(18);
+    // Location is right-aligned (apostrophe / % / CJK text)
+    const locBand = 400;
+    expect(
+      regionLuma(
+        out,
+        `${locBand}:${L.subSize}:${L.width - locBand - L.hPad}:${brandY}`,
+        1,
+      ),
+    ).toBeGreaterThan(18);
+    // Nothing may spill out of the bar onto the video above it
+    expect(regionLuma(out, `${L.width}:8:0:${barY - 10}`, 1)).toBeLessThan(200);
 
     if (prepared.tmpDir)
       fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
@@ -203,22 +256,57 @@ for (const viewType of ['grid6', 'grid4', 'grid4old', 'front'] as const) {
 
 test('drive window text switches over time', () => {
   const out = path.join(tmpRoot, 'smoke-drive.mp4');
-  const prepared = prepareComposeExport(makeRequest('front'), out);
+  const L = testLayout('front');
+  const prepared = prepareComposeExport(
+    makeRequest('front', { layout: L }),
+    out,
+  );
   const r = spawnSync(ffmpeg, prepared.args, {
     encoding: 'utf8',
     maxBuffer: 1 << 24,
   });
   expect(r.status).toBe(0);
 
-  const H = prepared.height;
-  const W = prepared.width;
-  // Drive text is right-aligned (x=w-tw-16, y=h-60+24, fontsize 20)
-  const crop = `420:26:${W - 420}:${H - 38}`;
+  // Drive text is right-aligned on the bar's lower row
+  const y = L.videoHeight + L.barHeight - L.subSize - L.padding;
+  const crop = `420:${L.subSize}:${L.width - 420 - L.hPad}:${y}`;
   const early = regionLuma(out, crop, 0.5);
   const late = regionLuma(out, crop, 1.5);
   // Both windows have text; both regions must be non-blank
   expect(early).toBeGreaterThan(18);
   expect(late).toBeGreaterThan(18);
+  if (prepared.tmpDir)
+    fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
+});
+
+test('a long export does not blow the command-line limit', () => {
+  // One gated drawtext per second is ~240 chars. Past ~150 windows the
+  // filtergraph exceeded Windows' 32767-char argv limit and ffmpeg never
+  // spawned, so this has to travel as a script file.
+  const windows = Array.from({ length: 600 }, (_, i) => ({
+    start: i,
+    end: i + 1,
+    text: `2026年07月26日 周日 ${String(i % 24).padStart(2, '0')}:00:00`,
+  }));
+  const prepared = prepareComposeExport(
+    makeRequest('front', {
+      durationSeconds: 600,
+      layout: testLayout('front'),
+      overlay: {
+        showTime: true,
+        showLocation: true,
+        showDriveData: true,
+        locationText: '深圳 宝安公园路',
+        timeWindows: windows,
+        driveWindows: windows.map((w) => ({ ...w, text: '45 km/h  D  AP' })),
+      },
+    }),
+    path.join(tmpRoot, 'long.mp4'),
+  );
+
+  const graph = graphOf(prepared);
+  expect(graph.length).toBeGreaterThan(32767);
+  for (const arg of prepared.args) expect(arg.length).toBeLessThan(32767);
   if (prepared.tmpDir)
     fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
 });
