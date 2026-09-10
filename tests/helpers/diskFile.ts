@@ -98,7 +98,16 @@ export function listAsFiles(root: string, subdir?: string): File[] {
   const base = subdir ? path.join(root, subdir) : root;
   const out: DiskFile[] = [];
   const walk = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      // Tesla writes SavedClips only once a clip has been saved manually, so a
+      // perfectly valid drive can be missing whole folders. "Nothing here" is
+      // the right answer; an ENOENT out of a listing helper is not.
+      return;
+    }
+    for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.isFile()) out.push(diskFile(root, full));

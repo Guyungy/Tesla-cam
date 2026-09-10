@@ -80,7 +80,17 @@ function listDirs(p: string): string[] {
   }
 }
 
-/** Cheap check for a Tesla SEI NAL (type 6) in the first MB of mdat. */
+/**
+ * Cheap check for a *Tesla* SEI NAL in the first MB of mdat.
+ *
+ * NAL type 6 alone is not enough: libx264 stamps every clip it encodes with a
+ * type-6 user_data_unregistered SEI carrying its version string, so a
+ * re-encoded (or size-trimmed) clip would masquerade as telemetry and the
+ * extraction assertions below would fail on footage that never had any. Tesla's
+ * payload sits directly behind a one-byte payload size and opens with the
+ * 0x42..0x69 marker `decodeSei` looks for; x264's uses the multi-byte 0xff
+ * size form and carries no such marker.
+ */
 function carriesSei(file: string): boolean {
   const size = fs.statSync(file).size;
   const fd = fs.openSync(file, 'r');
@@ -115,7 +125,16 @@ function carriesSei(file: string): boolean {
       const n = buf.readUInt32BE(c);
       c += 4;
       if (n < 1 || c + n > buf.length) break;
-      if ((buf[c] & 0x1f) === 6) return true;
+      if (
+        n > 5 &&
+        (buf[c] & 0x1f) === 6 &&
+        buf[c + 1] === 5 &&
+        buf[c + 2] !== 0xff
+      ) {
+        let m = c + 3;
+        while (m < c + n && buf[m] === 0x42) m++;
+        if (m > c + 3 && buf[m] === 0x69) return true;
+      }
       c += n;
     }
     return false;
