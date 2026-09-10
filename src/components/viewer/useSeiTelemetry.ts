@@ -4,6 +4,7 @@ import type { CamClip, CamFootage, SEIDataPoint } from '../../utils';
 import {
   detectHardBraking,
   extractFootageSEI,
+  probeCodecFromFiles,
   shareInflight,
 } from '../../utils';
 
@@ -25,8 +26,9 @@ type Params = {
 
 /**
  * SEI telemetry for a clip: lazy background extraction, the current sample
- * at the playhead (with staleness handling), and pre-sampled drive-text
- * windows for the compose export overlay.
+ * at the playhead (with staleness handling), pre-sampled drive-text
+ * windows for the compose export overlay, and — when extraction comes up
+ * empty — a probe of the container codec so the UI can explain why.
  */
 export function useSeiTelemetry({
   clip,
@@ -58,16 +60,24 @@ export function useSeiTelemetry({
     // previous clip's footage back into a viewer that has moved on.
     let cancelled = false;
     task
-      .then((seiData) => {
+      .then(async (seiData) => {
         if (cancelled) return;
         if (seiData?.length) {
           console.log('[SEI] Found', seiData.length, 'data points');
           onFootageUpdate?.({ ...footage, seiData });
-        } else {
-          console.log(
-            '[SEI] No telemetry in this clip (parked or pre-2025.44)',
-          );
+          return;
         }
+        // Nothing decoded. Before reporting "this clip has no telemetry", rule
+        // out the one other cause we can actually detect: an H.265/HEVC clip.
+        // The reader mirrors Tesla's own parser, which is H.264-only, so HEVC
+        // footage yields zero samples instead of an error — indistinguishable
+        // from "the car recorded nothing" unless we look at the container.
+        const codec = await probeCodecFromFiles(clip.videos);
+        if (cancelled) return;
+        console.log(
+          `[SEI] No telemetry in this clip (codec=${codec}; parked, pre-2025.44, or unsupported codec)`,
+        );
+        onFootageUpdate?.({ ...footage, codec });
       })
       .catch((e) => {
         if (cancelled) return;
@@ -167,6 +177,11 @@ export function useSeiTelemetry({
     [seiSeries],
   );
 
+  // ── Unreadable-codec notice ──
+  // Only meaningful when the container was probed (i.e. telemetry came up empty)
+  // and the codec is one the SEI reader cannot walk.
+  const unsupportedCodec = !hasRealMetadata && footage.codec === 'h265';
+
   // Hard-braking incident marks for the timeline (derived once per series)
   const incidentMarks = useMemo(
     () => detectHardBraking(seiSeries),
@@ -177,6 +192,7 @@ export function useSeiTelemetry({
     seiSeries,
     hasRealMetadata,
     currentSEI,
+    unsupportedCodec,
     buildDriveWindows,
     incidentMarks,
   };

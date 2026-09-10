@@ -18,6 +18,8 @@ export const locales = {
 
     // Viewer - Header
     'viewer.noLocation': '无位置信息',
+    'viewer.codecUnsupported':
+      '该片段为 H.265 / HEVC 编码，暂不支持解析行车遥测 —— 视频可正常播放，但仪表与 GPS 轨迹为空。特斯拉官方工具目前同样只支持 H.264。',
 
     // Viewer - Controls
     'viewer.snapshot': '截图',
@@ -144,6 +146,8 @@ export const locales = {
 
     // Viewer - Header
     'viewer.noLocation': 'No location info',
+    'viewer.codecUnsupported':
+      "This clip is H.265 / HEVC, so telemetry cannot be decoded yet — the video plays normally, but the dashboard and GPS track stay empty. Tesla's own dashcam tool is H.264-only too.",
 
     // Viewer - Controls
     'viewer.snapshot': 'Snapshot',

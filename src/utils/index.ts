@@ -2,6 +2,7 @@ export * from './calcEventSeconds';
 export * from './calcSeekInfo';
 export * from './correctNum';
 export * from './deleteResultToast';
+export * from './detectCodec';
 export * from './detectIncidents';
 export * from './exportLayout';
 export * from './formatDuration';

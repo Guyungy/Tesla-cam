@@ -7,6 +7,7 @@ import {
   IoTrashOutline,
   IoVolumeHigh,
   IoVolumeMute,
+  IoWarningOutline,
 } from 'react-icons/io5';
 import { MdPictureInPicture, MdReplay } from 'react-icons/md';
 
@@ -208,6 +209,7 @@ export function Viewer({
     seiSeries,
     hasRealMetadata,
     currentSEI,
+    unsupportedCodec,
     buildDriveWindows,
     incidentMarks,
   } = useSeiTelemetry({ clip, footage, onFootageUpdate, clipPlayedSeconds });
@@ -1138,6 +1140,14 @@ export function Viewer({
           ))}
         </div>
       </div>
+
+      {/* Codec notice — explains an empty dashboard instead of leaving it ambiguous */}
+      {unsupportedCodec && (
+        <div className="glass-panel flex items-start gap-2 rounded-xl border border-amber-400/25 px-3.5 py-2 text-[11px] leading-relaxed text-amber-200/90">
+          <IoWarningOutline className="mt-px shrink-0" size={14} />
+          <span>{t('viewer.codecUnsupported')}</span>
+        </div>
+      )}
 
       {/* Driving telemetry strip */}
       <Dashboard

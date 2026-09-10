@@ -158,15 +158,21 @@ follow the selected language.
 
 ## Compatibility
 
-| Item              | Requirement                                                                      |
-| ----------------- | -------------------------------------------------------------------------------- |
-| OS                | Windows 10+ · macOS 11+ · Linux (x64)                                            |
-| Tesla footage     | Standard `TeslaCam` folder layout (`RecentClips` / `SentryClips` / `SavedClips`) |
-| Telemetry overlay | Tesla firmware **2025.44.25+** on **HW3 / HW4**                                  |
-| Video codec       | H.264 (HEVC sources are not yet decoded — see [Roadmap](#roadmap))               |
+| Item              | Requirement                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
+| OS                | Windows 10+ · macOS 11+ · Linux (x64)                                                                   |
+| Tesla footage     | Standard `TeslaCam` folder layout (`RecentClips` / `SentryClips` / `SavedClips`)                        |
+| Telemetry overlay | Tesla firmware **2025.44.25+** on **HW3 / HW4**                                                         |
+| Video codec       | H.264 for telemetry; H.265 / HEVC clips are detected and flagged, not decoded — see [Roadmap](#roadmap) |
 
 Footage **without** SEI telemetry still plays normally; only the dashboard, GPS track,
 and telemetry-based features stay empty.
+
+Tesla embeds the telemetry SEI in both H.264 and H.265 streams, but the reader mirrors
+Tesla's own `dashcam-mp4.js`, which only walks H.264 NAL units. An HEVC clip therefore
+decodes to zero samples — and to tell that apart from "the car recorded nothing", the app
+probes the container and shows an explicit codec notice instead of a silently blank
+dashboard.
 
 ---
 
@@ -300,6 +306,12 @@ living list, and [issues / PRs](#contributing) that move any item forward are we
 
 ### 🔜 Next up
 
+- [ ] **HEVC / H.265 telemetry** — newer Tesla footage is H.265, and Tesla embeds the
+      same SEI payload in it. The current reader mirrors Tesla's own `dashcam-mp4.js`,
+      which is H.264-only, so HEVC clips now load, play, and get flagged by the codec
+      probe rather than failing quietly. Remaining work: walk H.265 NAL framing (2-byte
+      header, prefix SEI type 39) and enable Chromium's `PlatformHEVCDecoderSupport`
+      so the video decodes in-app too
 - [ ] **Ship the Linux build** — `electron-builder` already targets AppImage; add it to
       the release pipeline and document it as a supported download
 - [ ] **Real-footage end-to-end coverage** — the SEI telemetry and multi-segment event
@@ -311,8 +323,6 @@ living list, and [issues / PRs](#contributing) that move any item forward are we
 
 - [ ] **More UI languages** — the `src/i18n/locales.ts` structure already supports
       additional locales; add Japanese, Korean, German and French
-- [ ] **HEVC / H.265 source support** — newer Tesla footage is H.265; decode and export
-      it alongside the current H.264 path
 - [ ] **Embedded map view** — today the header links out to Amap / Google Maps; render
       the GPS track over real map tiles in-app
 - [ ] **Trip & mileage summary** — aggregate SEI speed/GPS samples per clip or per day

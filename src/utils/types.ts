@@ -41,12 +41,23 @@ export type ViewType =
   | 'left_pillar'
   | 'right_pillar';
 
+/**
+ * Video codec of a clip's camera streams, read from the MP4 sample description.
+ * `unknown` means the container could not be read, not that it is exotic.
+ */
+export type VideoCodec = 'h264' | 'h265' | 'unknown';
+
 export type CamFootage = {
   segments: CamSegment[];
   duration: number;
   urls: string[];
   /** Pre-parsed SEI metadata for the entire footage, indexed by seconds offset */
   seiData?: SEIDataPoint[];
+  /**
+   * Probed video codec. Only filled in when SEI extraction came up empty, so the
+   * UI can say "this clip is H.265" instead of silently showing a blank dashboard.
+   */
+  codec?: VideoCodec;
 };
 
 export type CamSegment = {
