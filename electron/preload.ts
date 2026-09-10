@@ -19,6 +19,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   trashFiles: (paths: string[], clipName: string) =>
     ipcRenderer.invoke('trash-files', { paths, clipName }),
 
+  // SEI telemetry cache (renderer extracts, main process persists)
+  seiCacheRead: (key: string): Promise<unknown> =>
+    ipcRenderer.invoke('sei-cache-read', { key }),
+  seiCacheWrite: (key: string, points: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('sei-cache-write', { key, points }),
+  seiCacheDelete: (key: string): Promise<unknown> =>
+    ipcRenderer.invoke('sei-cache-delete', { key }),
+  seiCacheClear: (): Promise<unknown> => ipcRenderer.invoke('sei-cache-clear'),
+
   // Fast compose export (source files → FFmpeg filter_complex)
   exportCompose: (payload: ComposeExportRequest) =>
     ipcRenderer.invoke('export-compose', payload),

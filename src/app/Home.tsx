@@ -11,7 +11,9 @@ import { useI18n } from '../i18n';
 import {
   type CamClip,
   type CamFootage,
+  deleteCachedSei,
   deleteResultToast,
+  footageCacheKey,
   genFootage,
   revokeFootage,
 } from '../utils';
@@ -135,6 +137,10 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
 
     const deletedIndex = items.indexOf(item);
     onDeleteClip(item);
+
+    // The telemetry of a deleted clip is dead weight — drop it rather than let
+    // it hold onto the cache budget until eviction comes around.
+    void deleteCachedSei(footageCacheKey(item));
 
     // Select the clip that took the deleted one's place (i.e. the next one
     // in sidebar order) — this is what makes keyboard triage flow.

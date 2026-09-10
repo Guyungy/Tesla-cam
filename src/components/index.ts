@@ -12,5 +12,6 @@ export * from './Sidebar';
 export * from './Thumb';
 export * from './TitleBar';
 export * from './Toast';
+export * from './TripReport';
 export * from './TslMark';
 export * from './Viewer';

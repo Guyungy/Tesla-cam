@@ -3,6 +3,7 @@ import {
   type ChildProcessWithoutNullStreams,
   spawn,
 } from 'child_process';
+import { createHash } from 'crypto';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
@@ -315,6 +316,70 @@ function detectHwEncoder(): Promise<string | null> {
   return hwEncoderPromise;
 }
 
+// ── SEI telemetry cache ──
+// Extraction results persisted per clip fingerprint so a restart does not
+// re-walk every NAL unit the user already paid for. One JSON file per clip,
+// keyed by a hash of the renderer's fingerprint (the key embeds file names,
+// sizes and mtimes, so it must not be used as a path component directly).
+const SEI_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+const SEI_CACHE_MAX_ENTRIES = 2000;
+/** A single clip's telemetry is a few MB at most; anything larger is bogus. */
+const SEI_CACHE_MAX_ENTRY_BYTES = 16 * 1024 * 1024;
+/** Bound on the fingerprint string accepted over IPC (a clip has ~6 files). */
+const SEI_CACHE_MAX_KEY_CHARS = 64 * 1024;
+
+function seiCacheDir(): string {
+  return path.join(app.getPath('userData'), 'sei-cache');
+}
+
+function seiCacheFile(key: string): string {
+  const digest = createHash('sha1').update(key).digest('hex');
+  return path.join(seiCacheDir(), `${digest}.json`);
+}
+
+/**
+ * Drop the oldest cache files until the directory fits its budget. Called
+ * after each write, which is rare (once per clip extraction), so the O(n)
+ * stat pass is not on any hot path.
+ */
+async function pruneSeiCache(): Promise<void> {
+  try {
+    const dir = seiCacheDir();
+    const names = (await fsPromises.readdir(dir)).filter((n) =>
+      n.endsWith('.json'),
+    );
+    if (names.length <= 1) return;
+
+    const entries: { file: string; mtimeMs: number; size: number }[] = [];
+    for (const name of names) {
+      const file = path.join(dir, name);
+      try {
+        const stat = await fsPromises.stat(file);
+        entries.push({ file, mtimeMs: stat.mtimeMs, size: stat.size });
+      } catch {
+        /* vanished between readdir and stat */
+      }
+    }
+
+    // Newest first: keep from the front, delete the tail.
+    entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    let total = 0;
+    const doomed: string[] = [];
+    entries.forEach((entry, index) => {
+      total += entry.size;
+      if (total > SEI_CACHE_MAX_BYTES || index >= SEI_CACHE_MAX_ENTRIES) {
+        doomed.push(entry.file);
+      }
+    });
+
+    for (const file of doomed) {
+      await fsPromises.rm(file, { force: true }).catch(() => {});
+    }
+  } catch {
+    /* cache maintenance is best-effort */
+  }
+}
+
 // Track active export sessions
 const exportSessions = new Map<string, ExportSession>();
 const composeSessions = new Map<string, ComposeSession>();
@@ -496,6 +561,79 @@ app.on('ready', () => {
       };
     },
   );
+
+  // ── SEI telemetry cache ──
+  // The renderer owns the extraction; this side only persists it, so the
+  // payload shape is validated structurally rather than trusted.
+
+  ipcMain.handle('sei-cache-read', async (_event, { key }) => {
+    if (typeof key !== 'string' || !key || key.length > SEI_CACHE_MAX_KEY_CHARS)
+      return null;
+    const file = seiCacheFile(key);
+    try {
+      const parsed = JSON.parse(await fsPromises.readFile(file, 'utf8')) as {
+        points?: unknown;
+      };
+      if (!Array.isArray(parsed?.points)) return null;
+      // A read is a use: keep the mtime meaningful for eviction ordering.
+      const now = new Date();
+      await fsPromises.utimes(file, now, now).catch(() => {});
+      return parsed.points;
+    } catch {
+      return null; // missing or unreadable — both mean "not cached"
+    }
+  });
+
+  ipcMain.handle('sei-cache-write', async (_event, { key, points }) => {
+    if (typeof key !== 'string' || !key || key.length > SEI_CACHE_MAX_KEY_CHARS)
+      return { ok: false, error: 'Invalid key' };
+    if (!Array.isArray(points)) return { ok: false, error: 'Invalid points' };
+
+    try {
+      const payload = JSON.stringify({
+        version: 1,
+        savedAt: Date.now(),
+        points,
+      });
+      if (Buffer.byteLength(payload, 'utf8') > SEI_CACHE_MAX_ENTRY_BYTES) {
+        return { ok: false, error: 'Entry too large' };
+      }
+
+      await fsPromises.mkdir(seiCacheDir(), { recursive: true });
+      const target = seiCacheFile(key);
+      // Write-then-rename: a crash mid-write must not leave a truncated file
+      // behind, because the next read would happily JSON-parse half a series.
+      const tmp = `${target}.${process.pid}.tmp`;
+      await fsPromises.writeFile(tmp, payload, 'utf8');
+      await fsPromises.rename(tmp, target);
+      await pruneSeiCache();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: errMsg(e) };
+    }
+  });
+
+  ipcMain.handle('sei-cache-delete', async (_event, { key }) => {
+    if (typeof key !== 'string' || !key || key.length > SEI_CACHE_MAX_KEY_CHARS)
+      return { ok: false, error: 'Invalid key' };
+    try {
+      // Deleting a clip should not leave its telemetry behind to be matched by
+      // a future clip that happens to share the fingerprint prefix.
+      await fsPromises.rm(seiCacheFile(key), { force: true });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: errMsg(e) };
+    }
+  });
+
+  ipcMain.handle('sei-cache-clear', async () => {
+    try {
+      await fsPromises.rm(seiCacheDir(), { recursive: true, force: true });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: errMsg(e) };
+    }
+  });
 
   // ── Fast compose export (source files → filter_complex → H.264) ──
 

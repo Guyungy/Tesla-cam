@@ -99,6 +99,18 @@ A compact live track panel overlays the video: the clip's full driving path with
 playhead marker that moves as you scrub. Pure SVG rendered from SEI GPS samples —
 fully offline, no map tiles. Collapsible with one click.
 
+### Trip Summary
+
+Every clip that carries telemetry gets an aggregated drive report: distance, moving
+time, average and peak speed, gear changes, hard-braking and harsh-steering counts,
+and time plus distance under Autopilot / FSD. It is all derived from the SEI series
+the viewer has already decoded — nothing is inferred from the video.
+
+Distance is integrated with the trapezoid rule and **never bridged across a telemetry
+gap**, so a parked car does not accrue phantom mileage, and implausible speeds are
+clamped so a single corrupt sample cannot dominate the total. The heuristic drive
+score is withheld entirely when a clip holds too little driving to judge.
+
 ### Incident Intelligence
 
 - **Hard-braking marks** — sharp speed drops with brake input are detected from SEI
@@ -153,6 +165,22 @@ offset_s, speed_kph, gear, steering_deg, brake_pct, throttle_pct, ap_status, lat
 Full Chinese and English support. Language auto-detected from browser settings,
 switchable via Settings (gear icon in title bar). Timestamps, labels, and all UI text
 follow the selected language.
+
+### Telemetry Cache & Large Folders
+
+Decoding telemetry means walking the NAL units of every front-camera segment, so the
+results are cached — in memory for the session and on disk (`userData/sei-cache`) across
+restarts, keyed by clip name plus the identity of every file that feeds the extraction.
+Re-opening a clip you already reviewed is instant instead of a second parse.
+
+The cache is self-limiting: it evicts least-recently-used entries past a 256 MB budget
+and drops a clip's telemetry when you delete the clip. It can be cleared by hand under
+**Settings → Maintenance**.
+
+The same "thousands of clips" problem applies to the sidebar, which renders only the
+rows on screen (date headers and clip cards have different heights, so the layout is
+computed rather than assumed) with the current day pinned to the top. Poster frames use
+a bounded LRU too, rather than accumulating one entry per clip ever scrolled past.
 
 ---
 
@@ -325,9 +353,10 @@ living list, and [issues / PRs](#contributing) that move any item forward are we
       additional locales; add Japanese, Korean, German and French
 - [ ] **Embedded map view** — today the header links out to Amap / Google Maps; render
       the GPS track over real map tiles in-app
-- [ ] **Trip & mileage summary** — aggregate SEI speed/GPS samples per clip or per day
-      into distance, duration, and driving-style stats
 - [ ] **Batch export** — queue multiple clips and export them unattended
+- [ ] **Cross-clip trip history** — the per-clip Trip Summary is in; folding a whole
+      drive, or a day of clips, into one report needs a clip index and somewhere to
+      keep the aggregate
 
 ### 💡 Exploring
 
@@ -335,9 +364,18 @@ living list, and [issues / PRs](#contributing) that move any item forward are we
       and HW4 so telemetry never silently stops decoding
 - [ ] **Customizable shortcuts & command palette** — let users rebind keys and jump to
       actions by name
-- [ ] **Virtualized clip list** — keep the sidebar smooth with tens of thousands of files
 - [ ] **Overlay presets** — save and reuse export overlay styles (clock position, data
       fields, branding)
+
+### ✅ Recently shipped
+
+- **Trip Summary** — per-clip distance, driving time, speeds, incident counts,
+  Autopilot usage, and a heuristic drive score that is withheld when the clip holds
+  too little driving to judge
+- **Telemetry cache** — extracted SEI is kept per clip, in memory for the session and
+  on disk across restarts, with automatic eviction and a manual clear in Settings
+- **Virtualized sidebar and bounded poster-frame cache** — the clip list renders only
+  the rows on screen, so a folder with tens of thousands of clips stays responsive
 
 Have an idea that is not listed? Open an issue — the wishlist is community-driven.
 

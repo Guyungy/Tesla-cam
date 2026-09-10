@@ -32,6 +32,22 @@ export const locales = {
     'viewer.clearInOut': '清除',
     'viewer.hardBraking': '急刹车',
 
+    // Trip summary
+    'trip.title': '行程统计',
+    'trip.hide': '收起',
+    'trip.none': '未启用',
+    'trip.distance': '里程',
+    'trip.moving': '行驶时长',
+    'trip.avgSpeed': '平均车速',
+    'trip.maxSpeed': '最高车速',
+    'trip.hardBraking': '急刹车',
+    'trip.harshSteering': '急打方向',
+    'trip.maxSteering': '最大转向',
+    'trip.gearChanges': '挡位切换',
+    'trip.apUsage': '辅助驾驶',
+    'trip.score': '驾驶评分',
+    'trip.scoreInsufficient': '数据不足',
+
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: 播放/暂停',
     'viewer.hint.seek': '←→: ±5秒',
@@ -112,6 +128,13 @@ export const locales = {
     'settings.exportVideoWidth': '视频导出分辨率',
     'settings.exportVideoWidthHint': '截图始终最高画质',
 
+    // Settings — maintenance
+    'settings.maintenance': '维护',
+    'settings.clearSeiCache': '清除遥测缓存',
+    'settings.seiCacheCleared': '遥测缓存已清除',
+    'settings.clearSeiCacheHint':
+      '释放行车遥测缓存占用的磁盘空间，下次打开片段时会重新解析',
+
     // Camera labels (export overlay)
     'cam.front': '前方',
     'cam.back': '后方',
@@ -159,6 +182,22 @@ export const locales = {
     'viewer.jumpToEvent': 'Jump to Event',
     'viewer.clearInOut': 'Clear',
     'viewer.hardBraking': 'Hard braking',
+
+    // Trip summary
+    'trip.title': 'Trip Summary',
+    'trip.hide': 'Collapse',
+    'trip.none': 'Not engaged',
+    'trip.distance': 'Distance',
+    'trip.moving': 'Driving time',
+    'trip.avgSpeed': 'Avg speed',
+    'trip.maxSpeed': 'Max speed',
+    'trip.hardBraking': 'Hard braking',
+    'trip.harshSteering': 'Harsh steering',
+    'trip.maxSteering': 'Max steering',
+    'trip.gearChanges': 'Gear changes',
+    'trip.apUsage': 'Autopilot',
+    'trip.score': 'Drive score',
+    'trip.scoreInsufficient': 'Not enough data',
 
     // Viewer - Keyboard hints
     'viewer.hint.playPause': 'Space: Play/Pause',
@@ -241,6 +280,13 @@ export const locales = {
     'settings.exportHwAccel': 'Hardware-accelerated encoding (faster)',
     'settings.exportVideoWidth': 'Video export resolution',
     'settings.exportVideoWidthHint': 'Screenshots stay full quality',
+
+    // Settings — maintenance
+    'settings.maintenance': 'Maintenance',
+    'settings.clearSeiCache': 'Clear telemetry cache',
+    'settings.seiCacheCleared': 'Telemetry cache cleared',
+    'settings.clearSeiCacheHint':
+      'Free the disk space used by cached driving telemetry; clips are re-parsed next time they open',
 
     // Camera labels (export overlay)
     'cam.front': 'Front',

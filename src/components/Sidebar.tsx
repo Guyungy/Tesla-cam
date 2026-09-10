@@ -1,12 +1,12 @@
 import clsx from 'clsx';
 import dayjs from 'dayjs';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FaFilter, FaSearch } from 'react-icons/fa';
 import { MdLocalMovies, MdSdStorage, MdSecurity } from 'react-icons/md';
 
 import { useI18n } from '../i18n';
 import type { CamClip, ClipType } from '../utils';
-import { parseTime } from '../utils';
+import { layoutRows, parseTime, rowIndexAt, visibleRange } from '../utils';
 import { Clip } from './Clip';
 
 type Props = {
@@ -21,8 +21,34 @@ type FilterType = ClipType | 'all';
 const SIDEBAR_WIDTH_KEY = 'tesla-cam-sidebar-width';
 
 type DateGroup = {
+  /** `YYYY-MM-DD` — stable identity, unlike the localized label */
+  key: string;
   label: string;
   clips: CamClip[];
+};
+
+/**
+ * Row heights are declared here and enforced on the row wrappers below. The
+ * layout is computed rather than measured, so any drift between these numbers
+ * and the markup shows up as overlapping rows.
+ */
+const HEADER_H = 28; // h-7
+const CLIP_H = 72; // p-2 (16) + h-14 thumbnail (56)
+const CLIP_GAP = 4; // gap-1
+const GROUP_GAP = 8; // mb-2
+const OVERSCAN = 6;
+/** Used for the first paint, before the viewport has been measured. */
+const FALLBACK_VIEWPORT_H = 800;
+
+type Row =
+  | { kind: 'header'; key: string; label: string; count: number }
+  | { kind: 'clip'; key: string; clip: CamClip };
+
+type HeaderSpan = {
+  top: number;
+  height: number;
+  label: string;
+  count: number;
 };
 
 export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
@@ -97,10 +123,7 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
     const yesterday = today.subtract(1, 'day');
     const dateFmt = t('format.dateGroup');
 
-    const groupMap = new Map<
-      string,
-      { label: string; clips: CamClip[]; sortKey: string }
-    >();
+    const groupMap = new Map<string, DateGroup & { sortKey: string }>();
 
     for (const clip of filteredItems) {
       const timeStr = parseTime(clip.name);
@@ -121,7 +144,12 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
       if (existing) {
         existing.clips.push(clip);
       } else {
-        groupMap.set(dateKey, { label, clips: [clip], sortKey: dateKey });
+        groupMap.set(dateKey, {
+          key: dateKey,
+          label,
+          clips: [clip],
+          sortKey: dateKey,
+        });
       }
     }
 
@@ -151,6 +179,116 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
     { id: 'sentry', label: t('sidebar.sentry'), icon: MdSecurity },
     { id: 'saved', label: t('sidebar.saved'), icon: MdSdStorage },
   ] as const;
+
+  // ── Virtualized list ──
+  // A drive can hold thousands of clips and every card carries a thumbnail,
+  // so rendering the whole filtered list means tens of thousands of DOM nodes
+  // before the user scrolls a single pixel. Date headers and clip cards have
+  // different heights, so rows are laid out once into absolute offsets and
+  // only the on-screen window (plus overscan) is mounted.
+
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = [];
+    for (const group of dateGroups) {
+      out.push({
+        kind: 'header',
+        key: `h:${group.key}`,
+        label: group.label,
+        count: group.clips.length,
+      });
+      for (const clip of group.clips) {
+        out.push({ kind: 'clip', key: `c:${clip.name}`, clip });
+      }
+    }
+    return out;
+  }, [dateGroups]);
+
+  const { spans, totalHeight } = useMemo(
+    () =>
+      layoutRows(
+        rows.map((row) =>
+          row.kind === 'header'
+            ? { height: HEADER_H, gap: GROUP_GAP }
+            : { height: CLIP_H, gap: CLIP_GAP },
+        ),
+      ),
+    [rows],
+  );
+
+  /** Header rows with their offsets, for the pinned date label. */
+  const headerSpans = useMemo(() => {
+    const out: HeaderSpan[] = [];
+    rows.forEach((row, index) => {
+      if (row.kind !== 'header') return;
+      const span = spans[index];
+      if (span) out.push({ ...span, label: row.label, count: row.count });
+    });
+    return out;
+  }, [rows, spans]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => setScrollTop(el.scrollTop);
+    const measure = () => setViewportHeight(el.clientHeight);
+
+    el.addEventListener('scroll', onScroll, { passive: true });
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      observer.disconnect();
+    };
+  }, []);
+
+  // A new folder or filter reshuffles the list, so the old offset is
+  // meaningless — start from the top.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = 0;
+    setScrollTop(0);
+  }, [items, filter, search]);
+
+  // The active clip is now normally not mounted (it may be far outside the
+  // window), so keyboard clip navigation has to bring it back into view.
+  useEffect(() => {
+    if (!activeClip) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const index = rows.findIndex(
+      (row) => row.kind === 'clip' && row.clip.name === activeClip.name,
+    );
+    const span = spans[index];
+    if (!span) return;
+
+    const viewTop = el.scrollTop;
+    const viewBottom = viewTop + el.clientHeight;
+    if (span.top >= viewTop && span.top + span.height <= viewBottom) return;
+    el.scrollTo({ top: Math.max(0, span.top - HEADER_H), behavior: 'smooth' });
+  }, [activeClip, rows, spans]);
+
+  const range = useMemo(
+    () =>
+      visibleRange(
+        spans,
+        scrollTop,
+        viewportHeight || FALLBACK_VIEWPORT_H,
+        OVERSCAN,
+      ),
+    [spans, scrollTop, viewportHeight],
+  );
+
+  const pinnedHeader = useMemo(() => {
+    const index = rowIndexAt(headerSpans, scrollTop);
+    return index >= 0 ? headerSpans[index] : null;
+  }, [headerSpans, scrollTop]);
 
   return (
     <div
@@ -210,34 +348,52 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
       </div>
 
       {/* List Area with Date Groups */}
-      <div className="flex-1 overflow-y-auto px-2 pb-4">
-        {filteredItems.length === 0 ? (
-          <div className="mt-10 flex flex-col items-center gap-2 text-neutral-500">
-            <FaFilter size={24} />
-            <span className="text-sm">{t('sidebar.noResults')}</span>
-          </div>
-        ) : (
-          dateGroups.map((group) => (
-            <div key={group.label} className="mb-2">
-              {/* Date header */}
-              <div className="sticky top-0 z-10 bg-neutral-900/90 px-2 py-1.5 text-[10px] font-semibold tracking-widest text-neutral-500 uppercase backdrop-blur-sm">
-                {group.label}
-                <span className="ml-2 text-neutral-600">
-                  {group.clips.length}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1">
-                {group.clips.map((item, i) => (
-                  <Clip
-                    key={`${group.label}-${i}`}
-                    item={item}
-                    active={item.name === activeClip?.name}
-                    onClick={() => onSelect(item)}
-                  />
-                ))}
-              </div>
+      <div className="relative flex-1 overflow-hidden">
+        <div ref={scrollRef} className="h-full overflow-y-auto px-2 pb-4">
+          {rows.length === 0 ? (
+            <div className="mt-10 flex flex-col items-center gap-2 text-neutral-500">
+              <FaFilter size={24} />
+              <span className="text-sm">{t('sidebar.noResults')}</span>
             </div>
-          ))
+          ) : (
+            <div className="relative" style={{ height: totalHeight }}>
+              {rows.slice(range.start, range.end).map((row, offset) => {
+                const span = spans[range.start + offset];
+                if (!span) return null;
+                return (
+                  <div
+                    key={row.key}
+                    className="absolute inset-x-0"
+                    style={{ top: span.top, height: span.height }}
+                  >
+                    {row.kind === 'header' ? (
+                      <div className="flex h-full items-center px-2 text-[10px] font-semibold tracking-widest text-neutral-500 uppercase">
+                        {row.label}
+                        <span className="ml-2 text-neutral-600">
+                          {row.count}
+                        </span>
+                      </div>
+                    ) : (
+                      <Clip
+                        item={row.clip}
+                        active={row.clip.name === activeClip?.name}
+                        onClick={() => onSelect(row.clip)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Pinned date label — replaces the sticky header that absolute
+            positioning would otherwise defeat */}
+        {pinnedHeader && (
+          <div className="pointer-events-none absolute inset-x-2 top-0 z-10 flex h-7 items-center bg-neutral-900/90 px-2 text-[10px] font-semibold tracking-widest text-neutral-500 uppercase backdrop-blur-sm">
+            {pinnedHeader.label}
+            <span className="ml-2 text-neutral-600">{pinnedHeader.count}</span>
+          </div>
         )}
       </div>
 

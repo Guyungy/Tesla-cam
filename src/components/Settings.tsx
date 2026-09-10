@@ -1,8 +1,10 @@
 import clsx from 'clsx';
+import { useState } from 'react';
 import { VscClose } from 'react-icons/vsc';
 
 import type { Locale } from '../i18n';
 import { useI18n } from '../i18n';
+import { clearSeiCache } from '../utils';
 import { useAppSettings } from './useAppSettings';
 import { useExportSettings, VIDEO_WIDTH_OPTIONS } from './useExportSettings';
 
@@ -20,6 +22,7 @@ export function Settings({ open, onClose }: Props) {
   const { locale, setLocale, t } = useI18n();
   const { exportSettings, setExportSettings } = useExportSettings();
   const { appSettings, setAppSettings } = useAppSettings();
+  const [cacheCleared, setCacheCleared] = useState(false);
 
   if (!open) return null;
 
@@ -159,6 +162,32 @@ export function Settings({ open, onClose }: Props) {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-white/5" />
+
+          {/* Maintenance */}
+          <div>
+            <label className="mb-3 block text-sm font-medium text-neutral-400">
+              {t('settings.maintenance')}
+            </label>
+            <button
+              onClick={() => {
+                void clearSeiCache();
+                setCacheCleared(true);
+              }}
+              className="w-full rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2.5 text-left transition-colors hover:border-white/10"
+            >
+              <span className="block text-sm text-neutral-300">
+                {cacheCleared
+                  ? t('settings.seiCacheCleared')
+                  : t('settings.clearSeiCache')}
+              </span>
+              <span className="mt-0.5 block text-[11px] text-neutral-500">
+                {t('settings.clearSeiCacheHint')}
+              </span>
+            </button>
           </div>
         </div>
       </div>

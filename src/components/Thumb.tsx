@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { createLruMap } from '../utils';
+
 type Props = {
   /** Pre-rendered thumb.png when the clip folder ships one */
   file?: File;
@@ -12,8 +14,12 @@ type Props = {
 // ── Poster-frame extraction: module-level cache + small work queue ──
 // A folder can hold hundreds of clips; frames are generated only when the
 // card scrolls into view, at most GEN_CONCURRENCY at a time, once per clip.
+// The cache is bounded: each entry is a JPEG data URL retained for the life of
+// the process, so "one per clip" is really "one per clip ever scrolled past".
 
-const frameCache = new Map<string, string>();
+/** Roughly 120 frames ≈ a few MB of data URLs. */
+const FRAME_CACHE_ENTRIES = 120;
+const frameCache = createLruMap<string, string>(FRAME_CACHE_ENTRIES);
 const GEN_CONCURRENCY = 2;
 let activeJobs = 0;
 const pending: (() => void)[] = [];

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import type { CamClip, CamFootage, SEIDataPoint } from '../../utils';
 import {
   detectHardBraking,
-  extractFootageSEI,
+  loadFootageSEI,
   probeCodecFromFiles,
   shareInflight,
 } from '../../utils';
@@ -53,7 +53,7 @@ export function useSeiTelemetry({
         clip.videos.length,
         'video files...',
       );
-      return extractFootageSEI(clip.videos, footage);
+      return loadFootageSEI(clip, footage);
     });
 
     // Still drop the result on a real unmount — delivering it would push a

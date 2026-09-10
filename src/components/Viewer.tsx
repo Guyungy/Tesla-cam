@@ -37,6 +37,7 @@ import { Progress } from './Progress';
 import { Rate } from './Rate';
 import { Toast } from './Toast';
 import { TrackMap } from './TrackMap';
+import { TripReport } from './TripReport';
 import { useAppSettings } from './useAppSettings';
 import { useExportSettings } from './useExportSettings';
 import { useSeiTelemetry } from './viewer/useSeiTelemetry';
@@ -203,6 +204,13 @@ export function Viewer({
 
   const clipPlayedSeconds = segment.startSeconds + segmentPlayedSeconds;
   const eventSeconds = calcEventSeconds(clip, footage);
+
+  // Wall-clock start of the whole footage (not the current segment), so the
+  // trip summary can place its bounds in real time.
+  const footageStartMs = useMemo(() => {
+    const first = footage.segments[0];
+    return first ? dayjs(parseTime(first.name)).valueOf() : Number.NaN;
+  }, [footage.segments]);
 
   // ── SEI telemetry (lazy extraction + playhead sample + drive windows) ──
   const {
@@ -1077,6 +1085,9 @@ export function Viewer({
       <div className="relative flex-1 overflow-hidden rounded-xl bg-black shadow-2xl ring-1 ring-white/10">
         {/* GPS track panel (renders only when the clip has GPS data) */}
         <TrackMap data={seiSeries} playedSeconds={clipPlayedSeconds} />
+
+        {/* Trip summary (renders only when the clip has telemetry) */}
+        <TripReport data={seiSeries} startTimeMs={footageStartMs} />
 
         {/* Video Grid */}
         <div className={clsx('h-full w-full', gridClass)}>

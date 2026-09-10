@@ -5,7 +5,14 @@ import {
   probeDurationFromUrl,
   probeMp4DurationFromFile,
 } from './probeMp4Duration';
-import type { CamFootage, CamName, CamSegment, SEIDataPoint } from './types';
+import { footageCacheKey, readCachedSei, writeCachedSei } from './seiCache';
+import type {
+  CamClip,
+  CamFootage,
+  CamName,
+  CamSegment,
+  SEIDataPoint,
+} from './types';
 
 const CONCURRENCY = 6;
 
@@ -224,6 +231,24 @@ export async function extractFootageSEI(
 
   allDataPoints.sort((a, b) => a.offsetSeconds - b.offsetSeconds);
   return allDataPoints.length > 0 ? allDataPoints : undefined;
+}
+
+/**
+ * Extract a clip's SEI series, reusing the cache when these exact files have
+ * already been decoded. Extraction is deterministic for a given set of files,
+ * so a hit is always equivalent to a fresh parse — it just skips the NAL walk.
+ */
+export async function loadFootageSEI(
+  clip: CamClip,
+  footage: CamFootage,
+): Promise<SEIDataPoint[] | undefined> {
+  const key = footageCacheKey(clip);
+  const cached = await readCachedSei(key);
+  if (cached) return cached;
+
+  const extracted = await extractFootageSEI(clip.videos, footage);
+  if (extracted && extracted.length > 0) writeCachedSei(key, extracted);
+  return extracted;
 }
 
 export function revokeFootage(footage?: CamFootage) {

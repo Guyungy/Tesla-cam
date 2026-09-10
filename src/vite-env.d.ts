@@ -7,6 +7,7 @@ import type {
   ComposeExportResult,
   ComposeProgressEvent,
 } from '../electron/composeTypes';
+import type { SEIDataPoint } from './utils/types';
 
 declare global {
   interface Window {
@@ -30,6 +31,12 @@ declare global {
         /** True when the drive has no Recycle Bin and files were erased. */
         permanent?: boolean;
       }>;
+
+      // SEI telemetry cache — extraction results persisted across restarts
+      seiCacheRead: (key: string) => Promise<unknown>;
+      seiCacheWrite: (key: string, points: SEIDataPoint[]) => Promise<unknown>;
+      seiCacheDelete: (key: string) => Promise<unknown>;
+      seiCacheClear: () => Promise<unknown>;
 
       // Fast compose export
       exportCompose: (
