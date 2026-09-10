@@ -1,0 +1,9 @@
+{
+  "camera": "front",
+  "timestamp": "2024-06-01T10:15:30Z",
+  "est_lon": "121.4737",
+  "city": "Shanghai",
+  "street": "Nanjing Rd",
+  "est_lat": "31.2304",
+  "reason": "sentry_away_event"
+}

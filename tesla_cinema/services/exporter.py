@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import bisect
+import re
 import platform
 import shutil
 import subprocess
@@ -9,11 +9,68 @@ from pathlib import Path
 
 import imageio_ffmpeg
 
-from tesla_cinema.domain.models import ALL_CAMS, CamClip, CamFootage, CamName, SEIDataPoint, StrictExportRequest, StrictExportSegment, StrictTelemetryFrame, ViewType
-from tesla_cinema.services.scan import camera_labels, parse_time, resolve_cam_name
+from tesla_cinema.domain.layout import camera_labels, cameras_for_view
+from tesla_cinema.domain.models import (
+    CamClip,
+    CamFootage,
+    CamName,
+    SEIDataPoint,
+    StrictExportRequest,
+    StrictExportSegment,
+    StrictTelemetryFrame,
+    ViewType,
+)
+from tesla_cinema.domain.timeline import segment_at, telemetry_at
+from tesla_cinema.services.scan import resolve_cam_name, wall_clock_text
 
 
 _cached_encoder: str | None = None
+
+
+def get_system_font() -> str:
+    system = platform.system()
+    if system == "Windows":
+        font_path = Path("C:/Windows/Fonts/msyh.ttc")
+        if font_path.exists():
+            return "C\\:/Windows/Fonts/msyh.ttc"
+        font_path2 = Path("C:/Windows/Fonts/simhei.ttf")
+        if font_path2.exists():
+            return "C\\:/Windows/Fonts/simhei.ttf"
+        font_path3 = Path("C:/Windows/Fonts/arial.ttf")
+        if font_path3.exists():
+            return "C\\:/Windows/Fonts/arial.ttf"
+    elif system == "Darwin":
+        font_path = Path("/System/Library/Fonts/PingFang.ttc")
+        if font_path.exists():
+            return "/System/Library/Fonts/PingFang.ttc"
+    else:
+        for path in [
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/droid/DroidSansFallback.ttf",
+        ]:
+            if Path(path).exists():
+                return path
+    return "sans-serif"
+
+
+def probe_resolution(path: Path) -> tuple[int, int]:
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        m = re.search(r'Video:.*?\s(\d{3,4})x(\d{3,4})', result.stderr)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return 1280, 720
+
+
 
 
 def _detect_h264_encoder(ffmpeg: str) -> str:
@@ -70,24 +127,34 @@ TESLA_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50">
 
 
 def strict_export_cams(view_type: ViewType) -> list[CamName]:
-    if view_type == "grid6":
-        return list(ALL_CAMS)
-    if view_type in {"grid4", "grid4old"}:
-        return ["front", "back", "left", "right"]
-    return [view_type]
+    return cameras_for_view(view_type)
 
 
-def resolve_canvas_size(view_type: ViewType) -> tuple[int, int, int]:
-    base_width = 1280
-    base_height = 720
+def resolve_canvas_size(view_type: ViewType, cam_resolutions: dict[CamName, tuple[int, int]]) -> tuple[int, int, int]:
     bottom_bar = 60
+    max_w = max(res[0] for res in cam_resolutions.values()) if cam_resolutions else 1280
+    max_h = max(res[1] for res in cam_resolutions.values()) if cam_resolutions else 720
+
     if view_type == "grid6":
-        return base_width * 3, base_height * 2 + bottom_bar, base_height * 2
-    if view_type == "grid4":
-        return base_width * 2, base_height * 2 + bottom_bar, base_height * 2
-    if view_type == "grid4old":
-        return base_width * 3, base_height * 2 + bottom_bar, base_height * 2
-    return base_width, base_height + bottom_bar, base_height
+        total_w = max_w * 3
+        total_h = max_h * 2
+        if total_w > 3840:
+            scale = 3840 / total_w
+            total_w = 3840
+            total_h = round(total_h * scale)
+        return total_w, total_h + bottom_bar, total_h
+
+    if view_type in {"grid4", "grid4old"}:
+        total_w = max_w * 2 if view_type == "grid4" else max_w * 3
+        total_h = max_h * 2
+        if total_w > 3840:
+            scale = 3840 / total_w
+            total_w = 3840
+            total_h = round(total_h * scale)
+        return total_w, total_h + bottom_bar, total_h
+
+    w, h = cam_resolutions.get(view_type, (max_w, max_h))
+    return w, h + bottom_bar, h
 
 
 def build_export_request(
@@ -100,7 +167,14 @@ def build_export_request(
     show_location: bool,
     show_drive_data: bool,
 ) -> StrictExportRequest:
-    width, height, video_height = resolve_canvas_size(view_type)
+    # Probe resolutions of available cameras in the clip
+    cam_resolutions: dict[CamName, tuple[int, int]] = {}
+    for video in clip.videos:
+        cam = resolve_cam_name(video.name)
+        if cam and cam not in cam_resolutions:
+            cam_resolutions[cam] = probe_resolution(video)
+
+    width, height, video_height = resolve_canvas_size(view_type, cam_resolutions)
     required_cams = strict_export_cams(view_type)
     source_path_map: dict[str, dict[CamName, Path]] = {}
     for video in clip.videos:
@@ -121,6 +195,17 @@ def build_export_request(
         for cam in required_cams:
             source = source_path_map.get(segment.name, {}).get(cam)
             if not source:
+                # Fallback: try to find the same camera in a neighboring segment
+                for seg_name, cams_dict in source_path_map.items():
+                    if cam in cams_dict:
+                        source = cams_dict[cam]
+                        break
+                # Ultimate fallback: use any video from the current segment
+                if not source:
+                    seg_cams = source_path_map.get(segment.name, {})
+                    if seg_cams:
+                        source = next(iter(seg_cams.values()))
+            if not source:
                 raise RuntimeError(f"Missing source video for {cam} in segment {segment.name}")
             cameras[cam] = source
         segments.append(
@@ -134,6 +219,11 @@ def build_export_request(
         remaining -= duration
         cursor += duration
 
+    # Always burn wall-clock timestamps into the export. Drive gauges only when
+    # SEI exists and the caller asked for them — location is a separate flag.
+    loc = (location_text or "").strip()
+    if loc.lower() in {"", "unknown location", "未知位置"}:
+        loc = clip.location_text
     return StrictExportRequest(
         file_name=f"{clip.name}-{view_type}.mp4",
         clip_name=clip.name,
@@ -145,54 +235,65 @@ def build_export_request(
         export_start_seconds=export_start_seconds,
         export_duration_seconds=export_duration_seconds,
         segments=segments,
-        telemetry_frames=build_telemetry_frames(footage, export_start_seconds, export_duration_seconds) if show_drive_data else [],
-        location_text=location_text,
-        show_location=show_location,
+        telemetry_frames=build_telemetry_frames(
+            footage,
+            export_start_seconds,
+            export_duration_seconds,
+            include_drive_data=show_drive_data,
+        ),
+        location_text=loc,
+        show_location=bool(show_location and loc),
         show_drive_data=show_drive_data,
         camera_labels=camera_labels(),
     )
 
 
 def resolve_segment(footage: CamFootage, clip_seconds: float):
-    for segment in footage.segments:
-        if segment.start_seconds <= clip_seconds < segment.start_seconds + segment.duration:
-            return segment
-    return footage.segments[-1] if footage.segments else None
+    return segment_at(footage, clip_seconds)
 
 
-def build_telemetry_frames(footage: CamFootage, export_start_seconds: float, export_duration_seconds: float) -> list[StrictTelemetryFrame]:
-    if not footage.sei_data:
+def build_telemetry_frames(
+    footage: CamFootage,
+    export_start_seconds: float,
+    export_duration_seconds: float,
+    *,
+    include_drive_data: bool = True,
+) -> list[StrictTelemetryFrame]:
+    """One overlay frame per output video frame.
+
+    Always carries wall-clock time (from segment name). Drive data is filled
+    when SEI is present and *include_drive_data* is True — so parked sentry
+    clips still burn in time/location without inventing speed.
+    """
+    if export_duration_seconds <= 0:
         return []
     frame_count = max(1, int(export_duration_seconds * 30))
-    offsets = [p.offset_seconds for p in footage.sei_data]
+    offsets = [p.offset_seconds for p in footage.sei_data] if footage.sei_data else []
     frames: list[StrictTelemetryFrame] = []
     for frame_index in range(frame_count):
         target = export_start_seconds + frame_index / 30.0
-        point = find_closest_sei(footage.sei_data, offsets, target)
         segment = resolve_segment(footage, target)
-        if point is None or segment is None:
-            return []
+        if segment is None:
+            break
+        local = max(0.0, target - segment.start_seconds)
+        point = (
+            find_closest_sei(footage.sei_data, offsets, target)
+            if include_drive_data and offsets
+            else None
+        )
         frames.append(
             StrictTelemetryFrame(
-                timestamp_text=parse_time(segment.name),
-                speed_kph=point.speed_kph,
-                gear=point.gear,
-                ap_status=point.ap_status,
+                timestamp_text=wall_clock_text(segment.name, local),
+                speed_kph=point.speed_kph if point else 0.0,
+                gear=point.gear if point and point.gear != "UNKNOWN" else "",
+                ap_status=point.ap_status if point and point.ap_status != "UNKNOWN" else "",
             )
         )
     return frames
 
 
 def find_closest_sei(sei_data: list[SEIDataPoint], offsets: list[float], target: float) -> SEIDataPoint | None:
-    if not sei_data:
-        return None
-    pos = bisect.bisect_left(offsets, target)
-    if pos == 0:
-        return sei_data[0]
-    if pos >= len(sei_data):
-        return sei_data[-1]
-    before, after = sei_data[pos - 1], sei_data[pos]
-    return before if (target - before.offset_seconds) <= (after.offset_seconds - target) else after
+    return telemetry_at(sei_data, target, offsets=offsets)
 
 
 def _build_telemetry_drawtext(frames: list[StrictTelemetryFrame], video_height: int, fps: int) -> list[str]:
@@ -205,6 +306,8 @@ def _build_telemetry_drawtext(frames: list[StrictTelemetryFrame], video_height: 
     if not frames:
         return filters
 
+    font_file = get_system_font()
+
     def _key(f: StrictTelemetryFrame) -> tuple:
         return (round(f.speed_kph), f.gear, f.timestamp_text, f.ap_status)
 
@@ -212,19 +315,27 @@ def _build_telemetry_drawtext(frames: list[StrictTelemetryFrame], video_height: 
         start_t = start_i / fps
         end_t = (end_i + 1) / fps
         enable = f"between(t,{start_t:.3f},{end_t:.3f})"
-        speed_text = f"{round(frame.speed_kph)} km/h"
-        filters.append(
-            f"drawtext=text='{escape_text(speed_text)}':enable='{enable}':font='Segoe UI':fontsize=24:fontcolor=0x22c55e:x=(w-tw)/2:y=10"
-        )
-        filters.append(
-            f"drawtext=text='{escape_text(frame.gear)}':enable='{enable}':font='Segoe UI':fontsize=20:fontcolor=white:x=24:y=12"
-        )
-        filters.append(
-            f"drawtext=text='{escape_text(frame.timestamp_text)}':enable='{enable}':font='Segoe UI':fontsize=26:fontcolor=white:x=70:y={video_height + 24}"
-        )
+        # Bottom bar: always burn absolute time (evidence).
+        if frame.timestamp_text:
+            filters.append(
+                f"drawtext=text='{escape_text(frame.timestamp_text)}':enable='{enable}':"
+                f"fontfile='{font_file}':fontsize=26:fontcolor=white:x=70:y={video_height + 24}"
+            )
+        # Top HUD: only when we have real drive samples.
+        if frame.gear:
+            filters.append(
+                f"drawtext=text='{escape_text(frame.gear)}':enable='{enable}':"
+                f"fontfile='{font_file}':fontsize=20:fontcolor=white:x=24:y=12"
+            )
+            speed_text = f"{round(frame.speed_kph)} km/h"
+            filters.append(
+                f"drawtext=text='{escape_text(speed_text)}':enable='{enable}':"
+                f"fontfile='{font_file}':fontsize=24:fontcolor=0x22c55e:x=(w-tw)/2:y=10"
+            )
         if frame.ap_status and frame.ap_status != "UNKNOWN":
             filters.append(
-                f"drawtext=text='{escape_text(frame.ap_status)}':enable='{enable}':font='Segoe UI':fontsize=12:fontcolor=white:x=w-tw-24:y=18"
+                f"drawtext=text='{escape_text(frame.ap_status)}':enable='{enable}':"
+                f"fontfile='{font_file}':fontsize=12:fontcolor=white:x=w-tw-24:y=18"
             )
 
     group_start = 0
@@ -297,17 +408,24 @@ def build_filter_graph(request: StrictExportRequest, icon_path: Path) -> tuple[s
     input_args.extend(["-i", str(icon_path)])
     icon_input = input_index
     filter_parts.extend(layout_filters(request.view_type, final_labels))
+    font_file = get_system_font()
     overlays = [
         f"[stacked]drawbox=x=0:y={request.video_height}:w={request.width}:h={request.height - request.video_height}:color=black@0.85:t=fill",
-        f"drawtext=text='{escape_text(request.brand_text)}':font='Segoe UI':fontsize=18:fontcolor=0xfb7185:x=70:y={request.video_height + 12}",
+        f"drawtext=text='{escape_text(request.brand_text)}':fontfile='{font_file}':fontsize=18:fontcolor=0xfb7185:x=70:y={request.video_height + 12}",
     ]
+    # Location always on the bottom-right when known — courts / insurance care.
     if request.show_location and request.location_text:
         overlays.append(
-            f"drawtext=text='{escape_text(request.location_text)}':font='Segoe UI':fontsize=14:fontcolor=white:x=w-tw-22:y={request.video_height + 20}"
+            f"drawtext=text='{escape_text(request.location_text)}':fontfile='{font_file}':"
+            f"fontsize=16:fontcolor=white:x=w-tw-22:y={request.video_height + 18}"
         )
-    if request.telemetry_frames:
+    has_drive = any(f.gear for f in request.telemetry_frames)
+    if has_drive:
         overlays.append("drawbox=x=0:y=0:w=iw:h=50:color=black@0.6:t=fill")
-        overlays.extend(_build_telemetry_drawtext(request.telemetry_frames, request.video_height, request.fps))
+    if request.telemetry_frames:
+        overlays.extend(
+            _build_telemetry_drawtext(request.telemetry_frames, request.video_height, request.fps)
+        )
 
     # Bug fix: icon scale and final overlay must be separate filter chains (`;`-separated),
     # not comma-chained with the overlay filters.

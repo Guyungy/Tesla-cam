@@ -65,10 +65,16 @@ class CamClip:
 
     @property
     def location_text(self) -> str:
+        """Human-readable place for HUD / export. Empty if unknown."""
         if not self.event:
-            return "Unknown location"
+            return ""
         parts = [part for part in [self.event.city, self.event.street] if part]
-        return ", ".join(parts) if parts else "Unknown location"
+        if parts:
+            return " · ".join(parts)
+        lat, lon = self.event.est_lat, self.event.est_lon
+        if lat and lon:
+            return f"{lat}, {lon}"
+        return ""
 
 
 @dataclass(slots=True)

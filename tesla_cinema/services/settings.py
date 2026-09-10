@@ -26,7 +26,8 @@ class SettingsStore:
             show_location=self._settings.value("show_location", True, bool),
             show_drive_data=self._settings.value("show_drive_data", True, bool),
             language=self._settings.value("language", "zh-CN", str),
-            default_view=self._settings.value("default_view", "grid4", str),
+            # Single-cam default: multi-grid (4/6) freezes low-end PCs / USB drives.
+            default_view=self._settings.value("default_view", "front", str),
         )
 
     def save(self, value: AppSettings) -> None:

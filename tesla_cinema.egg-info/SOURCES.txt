@@ -4,6 +4,7 @@ pyproject.toml
 tesla_cinema/__init__.py
 tesla_cinema/__main__.py
 tesla_cinema/main.py
+tesla_cinema/server.py
 tesla_cinema.egg-info/PKG-INFO
 tesla_cinema.egg-info/SOURCES.txt
 tesla_cinema.egg-info/dependency_links.txt

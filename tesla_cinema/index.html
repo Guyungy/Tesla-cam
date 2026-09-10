@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Tesla Cinema - 极速超清车载记录仪影院</title>
+    <!-- Tailwind CSS for rich aesthetics -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        tesla: '#e82127',
+                        cyber: {
+                            bg: '#0d0e12',
+                            card: '#121318',
+                            border: '#1f2026',
+                            muted: '#a1a1aa'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- React & Babel for native compilation -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        body {
+            background-color: #0d0e12;
+            color: #e4e4e7;
+            font-family: 'Segoe UI', 'Inter', -apple-system, sans-serif;
+            overflow: hidden;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0d0e12;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1f2026;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #e82127;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const cameraLabels = {
+            front: "前摄 (Front)",
+            back: "后摄 (Rear)",
+            left: "左摄 Repeater",
+            right: "右摄 Repeater",
+            left_pillar: "左柱 Pillar",
+            right_pillar: "右柱 Pillar"
+        };
+
+        const viewLabels = [
+            { id: "grid4", label: "四镜 2×2" },
+            { id: "grid6", label: "六镜 3×2" },
+            { id: "grid4old", label: "老款四镜" },
+            { id: "front", label: "前摄" },
+            { id: "back", label: "后摄" },
+            { id: "left", label: "左摄" },
+            { id: "right", label: "右摄" },
+            { id: "left_pillar", label: "左柱" },
+            { id: "right_pillar", label: "右柱" }
+        ];
+
+        const reasonMap = {
+            "sentry_away_event": "哨兵事件 (人员接近)",
+            "sentry_city_event": "哨兵事件 (城市环境)",
+            "sentry_sentry_sentry": "哨兵触发 (警报)",
+            "user_saved_event": "手动保存",
+            "user_saved_dashcam": "行车记录仪保存",
+            "user_saved_horn": "鸣笛保存"
+        };
+
+        function App() {
+            const [folderPath, setFolderPath] = useState("F:\\TeslaCam");
+            const [clips, setClips] = useState([]);
+            const [selectedClip, setSelectedClip] = useState(null);
+            const [viewType, setViewType] = useState("grid4");
+            const [footage, setFootage] = useState(null);
+            const [currentSegIndex, setCurrentSegIndex] = useState(0);
+            
+            // Playback state
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [currentTime, setCurrentTime] = useState(0);
+            const [trimIn, setTrimIn] = useState(0);
+            const [trimOut, setTrimOut] = useState(0);
+            const [eventOffset, setEventOffset] = useState(null);
+
+            // Double click zoom
+            const [zoomedCam, setZoomedCam] = useState(null);
+
+            // Telemetry indicators
+            const [telemetry, setTelemetry] = useState({
+                speed: 0,
+                gear: "P",
+                ap: "OFF",
+                lat: 0.0,
+                lon: 0.0,
+                throttle: 0,
+                brake: 0,
+                steering: 0
+            });
+
+            // Refs for synchronization
+            const videoRefs = useRef({});
+            const syncTimer = useRef(null);
+            const canvasRef = useRef(null);
+
+            // Initial load path from settings if available
+            useEffect(() => {
+                fetch("/api/settings")
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.default_view) setViewType(data.default_view);
+                    })
+                    .catch(() => {});
+                
+                // Automatically scan default path
+                handleScan(folderPath);
+            }, []);
+
+            const handleScan = (path) => {
+                fetch(`/api/clips?folder=${encodeURIComponent(path)}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.error) {
+                            alert(data.error);
+                        } else {
+                            setClips(data.clips || []);
+                            if (data.clips && data.clips.length > 0) {
+                                selectClip(data.clips[0], path);
+                            }
+                        }
+                    })
+                    .catch(err => alert("无法连接到本地 Python 后端服务"));
+            };
+
+            const selectClip = (clip, path = folderPath) => {
+                setSelectedClip(clip);
+                setFootage(null);
+                setCurrentTime(0);
+                setZoomedCam(null);
+                setIsPlaying(false);
+
+                fetch(`/api/footage?folder=${encodeURIComponent(path)}&clip=${encodeURIComponent(clip.name)}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.error) {
+                            alert(data.error);
+                        } else {
+                            setFootage(data);
+                            setTrimIn(0);
+                            setTrimOut(data.duration);
+                            setCurrentSegIndex(0);
+
+                            // Parse Event Offset
+                            if (clip.event && clip.event.timestamp) {
+                                try {
+                                    const evtStr = clip.event.timestamp.replace('Z', '').replace('T', ' ');
+                                    const evtDate = new Date(evtStr);
+                                    
+                                    // Parse earliest segment name timestamp (e.g. 2026-05-25_14-59-12)
+                                    if (data.segments && data.segments.length > 0) {
+                                        const segName = data.segments[0].name; // "2026-05-25_14-59-12"
+                                        const cleanSeg = segName.replace('_', ' ').replace(/-/g, ':');
+                                        const segDate = new Date(cleanSeg);
+                                        let diff = (evtDate - segDate) / 1000;
+                                        if (diff < 0 || diff > data.duration) {
+                                            diff = diff % 3600;
+                                            if (diff > data.duration) diff = diff % 60;
+                                        }
+                                        if (diff >= 0 && diff <= data.duration) {
+                                            setEventOffset(diff);
+                                        } else {
+                                            setEventOffset(null);
+                                        }
+                                    }
+                                } catch (e) {
+                                    setEventOffset(null);
+                                }
+                            } else {
+                                setEventOffset(null);
+                            }
+                        }
+                    });
+            };
+
+            // Master video sync & tick
+            useEffect(() => {
+                if (isPlaying) {
+                    // Play all active visible videos
+                    getActiveCams().forEach(cam => {
+                        const v = videoRefs.current[cam];
+                        if (v) v.play().catch(() => {});
+                    });
+
+                    // Tick sync
+                    syncTimer.current = setInterval(() => {
+                        const master = getMasterVideo();
+                        if (master) {
+                            const time = getGlobalTime(master.currentTime);
+                            setCurrentTime(time);
+                            syncSlaves(master.currentTime);
+                        }
+                    }, 50);
+                } else {
+                    if (syncTimer.current) clearInterval(syncTimer.current);
+                    getActiveCams().forEach(cam => {
+                        const v = videoRefs.current[cam];
+                        if (v) v.pause();
+                    });
+                }
+                return () => {
+                    if (syncTimer.current) clearInterval(syncTimer.current);
+                };
+            }, [isPlaying, viewType, zoomedCam, footage, currentSegIndex]);
+
+            // Sync playhead when changing layouts or double-clicking to zoom a camera window
+            useEffect(() => {
+                if (!footage || !footage.segments) return;
+                const seg = footage.segments[currentSegIndex];
+                if (!seg) return;
+                const localSec = currentTime - seg.start_seconds;
+
+                const timer = setTimeout(() => {
+                    getActiveCams().forEach(cam => {
+                        const v = videoRefs.current[cam];
+                        if (v) {
+                            v.currentTime = localSec;
+                            if (isPlaying) {
+                                v.play().catch(() => {});
+                            }
+                        }
+                    });
+                }, 50);
+
+                return () => clearTimeout(timer);
+            }, [viewType, zoomedCam]);
+
+            // Sync other videos based on the master playhead
+            const syncSlaves = (masterLocalTime) => {
+                const active = getActiveCams();
+                active.forEach(cam => {
+                    const v = videoRefs.current[cam];
+                    if (v && v !== getMasterVideo()) {
+                        if (Math.abs(v.currentTime - masterLocalTime) > 0.12) {
+                            v.currentTime = masterLocalTime;
+                        }
+                    }
+                });
+            };
+
+            const getMasterVideo = () => {
+                const active = getActiveCams();
+                if (active.length > 0) {
+                    return videoRefs.current[active[0]];
+                }
+                return null;
+            };
+
+            const getActiveCams = () => {
+                if (zoomedCam) return [zoomedCam];
+                if (viewType === "grid6") return ["left", "front", "right", "left_pillar", "back", "right_pillar"];
+                if (viewType === "grid4" || viewType === "grid4old") return ["front", "back", "left", "right"];
+                return [viewType];
+            };
+
+            const getGlobalTime = (localSec) => {
+                if (!footage || !footage.segments) return 0;
+                const seg = footage.segments[currentSegIndex];
+                return (seg ? seg.start_seconds : 0) + localSec;
+            };
+
+            // Seek playhead instantly across all active videos
+            const handleSeek = (globalSec) => {
+                if (!footage || !footage.segments) return;
+                const clamped = Math.max(0, Math.min(globalSec, footage.duration));
+                setCurrentTime(clamped);
+
+                // Find matching segment index
+                let targetSegIdx = footage.segments.length - 1;
+                for (let i = 0; i < footage.segments.length; i++) {
+                    const seg = footage.segments[i];
+                    if (clamped < seg.start_seconds + seg.duration) {
+                        targetSegIdx = i;
+                        break;
+                    }
+                }
+
+                const seg = footage.segments[targetSegIdx];
+                const localSec = clamped - seg.start_seconds;
+
+                if (targetSegIdx !== currentSegIndex) {
+                    setCurrentSegIndex(targetSegIdx);
+                    // QUrl / setSource takes time, but browser updates source instantly
+                    // Force state update and set time once loaded
+                    setTimeout(() => {
+                        getActiveCams().forEach(cam => {
+                            const v = videoRefs.current[cam];
+                            if (v) v.currentTime = localSec;
+                        });
+                        if (isPlaying) {
+                            getActiveCams().forEach(cam => {
+                                const v = videoRefs.current[cam];
+                                if (v) v.play().catch(() => {});
+                            });
+                        }
+                    }, 50);
+                } else {
+                    getActiveCams().forEach(cam => {
+                        const v = videoRefs.current[cam];
+                        if (v) v.currentTime = localSec;
+                    });
+                }
+            };
+
+            // Handle Telemetry mapping
+            useEffect(() => {
+                let speed = 0;
+                let gear = "P";
+                let ap = "OFF";
+                let lat = 0.0;
+                let lon = 0.0;
+                let throttle = 0;
+                let brake = 0;
+                let steering = 0;
+
+                // Fallback to estimated event coordinates if available (parked clips)
+                if (selectedClip && selectedClip.event && selectedClip.event.est_lat && selectedClip.event.est_lon) {
+                    const parsedLat = parseFloat(selectedClip.event.est_lat);
+                    const parsedLon = parseFloat(selectedClip.event.est_lon);
+                    if (!isNaN(parsedLat) && !isNaN(parsedLon) && parsedLat !== 0.0 && parsedLon !== 0.0) {
+                        lat = parsedLat;
+                        lon = parsedLon;
+                    }
+                }
+
+                if (footage && footage.sei_data && footage.sei_data.length > 0) {
+                    // Binary search or closest search for telemetry offset
+                    const target = currentTime;
+                    let closest = footage.sei_data[0];
+                    let minDiff = Math.abs(closest.offset_seconds - target);
+                    for (let i = 1; i < footage.sei_data.length; i++) {
+                        const diff = Math.abs(footage.sei_data[i].offset_seconds - target);
+                        if (diff < minDiff) {
+                            minDiff = diff;
+                            closest = footage.sei_data[i];
+                        }
+                    }
+
+                    speed = closest.speed_kph;
+                    gear = closest.gear;
+                    ap = closest.ap_status;
+                    throttle = closest.throttle_pct || 0;
+                    brake = closest.brake_pct || 0;
+                    steering = closest.steering_angle_deg || 0;
+
+                    // Only override with SEI coordinates if they are valid
+                    if (closest.latitude !== 0.0 || closest.longitude !== 0.0) {
+                        lat = closest.latitude;
+                        lon = closest.longitude;
+                    }
+                }
+
+                setTelemetry({
+                    speed,
+                    gear,
+                    ap,
+                    lat,
+                    lon,
+                    throttle,
+                    brake,
+                    steering
+                });
+
+                // Update canvas GPS map pulse
+                drawGPSMap(lat, lon);
+            }, [currentTime, footage, selectedClip]);
+
+            const drawGPSMap = (currLat, currLon) => {
+                const canvas = canvasRef.current;
+                if (!canvas || !footage) return;
+                const ctx = canvas.getContext("2d");
+                const w = canvas.width;
+                const h = canvas.height;
+                ctx.clearRect(0, 0, w, h);
+
+                // Render grid
+                ctx.strokeStyle = "#1f2026";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                const gridSpacing = 30;
+                for (let x = 0; x < w; x += gridSpacing) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, h);
+                    ctx.stroke();
+                }
+                for (let y = 0; y < h; y += gridSpacing) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(w, y);
+                    ctx.stroke();
+                }
+                ctx.setLineDash([]);
+
+                let coords = [];
+                if (footage.sei_data) {
+                    coords = footage.sei_data
+                        .filter(pt => pt.latitude !== 0.0 || pt.longitude !== 0.0)
+                        .map(pt => ({ lat: pt.latitude, lon: pt.longitude }));
+                }
+
+                // If sei_data has no coords, but we have a valid current location (sentry fallback)
+                if (coords.length === 0 && currLat !== 0.0 && currLon !== 0.0) {
+                    coords = [{ lat: currLat, lon: currLon }];
+                }
+
+                if (coords.length === 0) {
+                    ctx.fillStyle = "#52525b";
+                    ctx.font = "12px sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.fillText("无 GPS 轨迹数据", w / 2, h / 2);
+                    return;
+                }
+
+                // Compute bounding box
+                const lats = coords.map(c => c.lat);
+                const lons = coords.map(c => c.lon);
+                const minLat = Math.min(...lats);
+                const maxLat = Math.max(...lats);
+                const minLon = Math.min(...lons);
+                const maxLon = Math.max(...lons);
+
+                const latRange = (maxLat - minLat) || 0.0001;
+                const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180);
+                const lonRange = ((maxLon - minLon) * cosLat) || 0.0001;
+
+                const margin = 15;
+                const scale = Math.min((w - 2 * margin) / lonRange, (h - 2 * margin) / latRange);
+
+                const toCanvas = (lat, lon) => {
+                    if (maxLat === minLat && maxLon === minLon) {
+                        return [w / 2, h / 2];
+                    }
+                    const cx = margin + (lon - minLon) * cosLat * scale;
+                    const cy = margin + (maxLat - lat) * scale;
+                    return [cx, cy];
+                };
+
+                // Draw path only if we have a trajectory (more than 1 coordinate)
+                if (coords.length > 1) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = "rgba(232, 33, 39, 0.7)";
+                    ctx.lineWidth = 3;
+                    coords.forEach((c, idx) => {
+                        const [cx, cy] = toCanvas(c.lat, c.lon);
+                        if (idx === 0) ctx.moveTo(cx, cy);
+                        else ctx.lineTo(cx, cy);
+                    });
+                    ctx.stroke();
+
+                    // Draw Start dot (Teal)
+                    const [sx, sy] = toCanvas(coords[0].lat, coords[0].lon);
+                    ctx.beginPath();
+                    ctx.fillStyle = "#06b6d4";
+                    ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Draw End dot (Orange)
+                    const [ex, ey] = toCanvas(coords[coords.length - 1].lat, coords[coords.length - 1].lon);
+                    ctx.beginPath();
+                    ctx.fillStyle = "#f97316";
+                    ctx.arc(ex, ey, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // Draw current dot (white pulse + red core) or tactical Sentry warning crosshair marker
+                if (currLat !== 0.0 || currLon !== 0.0) {
+                    const [cx, cy] = toCanvas(currLat, currLon);
+                    
+                    const isStationary = coords.length <= 1;
+                    if (isStationary) {
+                        // Pulsing outer warning rings
+                        ctx.beginPath();
+                        ctx.fillStyle = "rgba(245, 158, 11, 0.15)";
+                        ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Crosshairs for tactical sentry target feel
+                        ctx.strokeStyle = "#f59e0b";
+                        ctx.lineWidth = 1.5;
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(cx - 14, cy); ctx.lineTo(cx + 14, cy);
+                        ctx.moveTo(cx, cy - 14); ctx.lineTo(cx, cy + 14);
+                        ctx.stroke();
+
+                        // Clear inner circle for target look
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+                        ctx.fillStyle = "#121318"; // matches card bg
+                        ctx.fill();
+                        ctx.strokeStyle = "#f59e0b";
+                        ctx.stroke();
+
+                        // Center core
+                        ctx.beginPath();
+                        ctx.fillStyle = "#e82127"; // Tesla Red core
+                        ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                    } else {
+                        ctx.beginPath();
+                        ctx.fillStyle = "rgba(232, 33, 39, 0.25)";
+                        ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        ctx.beginPath();
+                        ctx.fillStyle = "#e82127";
+                        ctx.strokeStyle = "#ffffff";
+                        ctx.lineWidth = 1.5;
+                        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                }
+            };
+
+            const togglePlay = () => {
+                setIsPlaying(!isPlaying);
+            };
+
+            const jump = (secs) => {
+                handleSeek(currentTime + secs);
+            };
+
+            const handleDelete = () => {
+                if (!selectedClip) return;
+                if (!confirm(`确定将片段 ${selectedClip.name} 移入回收站？`)) return;
+
+                fetch("/api/delete", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ folder: folderPath, clip: selectedClip.name })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) alert(data.error);
+                    else {
+                        const newClips = clips.filter(c => c.name !== selectedClip.name);
+                        setClips(newClips);
+                        if (newClips.length > 0) selectClip(newClips[0]);
+                        else setFootage(null);
+                    }
+                });
+            };
+
+            const handleExport = () => {
+                if (!selectedClip || !footage) return;
+                
+                const outputFileName = `${selectedClip.name}-${viewType}.mp4`;
+                const fullOutputPath = prompt("请输入导出的 MP4 文件完整绝对路径：", `E:\\${outputFileName}`);
+                if (!fullOutputPath) return;
+
+                const btn = document.getElementById("export-btn-web");
+                btn.disabled = true;
+                btn.innerText = "正在后台合成导出中...";
+
+                fetch("/api/export", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        folder: folderPath,
+                        clip: selectedClip.name,
+                        view_type: viewType,
+                        start_sec: trimIn,
+                        duration_sec: trimOut - trimIn,
+                        output_path: fullOutputPath
+                    })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    btn.disabled = false;
+                    btn.innerText = "严格导出";
+                    if (data.error) alert(`导出失败: ${data.error}`);
+                    else alert(`导出成功！文件已保存至：\n${data.output}`);
+                })
+                .catch(() => {
+                    btn.disabled = false;
+                    btn.innerText = "严格导出";
+                    alert("导出执行遇到异常");
+                });
+            };
+
+            const fmtSec = (sec) => {
+                const s = Math.floor(sec);
+                const m = Math.floor(s / 60);
+                const r = s % 60;
+                return `${m.toString().padStart(2, '0')}:${r.toString().padStart(2, '0')}`;
+            };
+
+            const getSegmentVideoUrl = (cam) => {
+                if (!footage || !footage.segments || footage.segments.length === 0) return "";
+                const seg = footage.segments[currentSegIndex];
+                return seg ? seg.cameras[cam] || "" : "";
+            };
+
+            // Custom slider click-seek & handle drag event parsing
+            const handleSliderMouseDown = (e) => {
+                if (!footage) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const pct = clickX / rect.width;
+                const sec = pct * footage.duration;
+
+                const inX = (trimIn / footage.duration) * rect.width;
+                const outX = (trimOut / footage.duration) * rect.width;
+
+                // Drag handles detection
+                if (Math.abs(clickX - inX) <= 12) {
+                    const handleDrag = (ev) => {
+                        const newX = ev.clientX - rect.left;
+                        const newSec = Math.max(0, Math.min(newX / rect.width * footage.duration, trimOut - 1.0));
+                        setTrimIn(newSec);
+                    };
+                    const handleMouseUp = () => {
+                        document.removeEventListener("mousemove", handleDrag);
+                        document.removeEventListener("mouseup", handleMouseUp);
+                    };
+                    document.addEventListener("mousemove", handleDrag);
+                    document.addEventListener("mouseup", handleMouseUp);
+                } else if (Math.abs(clickX - outX) <= 12) {
+                    const handleDrag = (ev) => {
+                        const newX = ev.clientX - rect.left;
+                        const newSec = Math.max(trimIn + 1.0, Math.min(newX / rect.width * footage.duration, footage.duration));
+                        setTrimOut(newSec);
+                    };
+                    const handleMouseUp = () => {
+                        document.removeEventListener("mousemove", handleDrag);
+                        document.removeEventListener("mouseup", handleMouseUp);
+                    };
+                    document.addEventListener("mousemove", handleDrag);
+                    document.addEventListener("mouseup", handleMouseUp);
+                } else {
+                    // Click track to seek playhead
+                    handleSeek(sec);
+                    
+                    const handleDrag = (ev) => {
+                        const dragX = ev.clientX - rect.left;
+                        const dragSec = Math.max(0, Math.min(dragX / rect.width * footage.duration, footage.duration));
+                        handleSeek(dragSec);
+                    };
+                    const handleMouseUp = () => {
+                        document.removeEventListener("mousemove", handleDrag);
+                        document.removeEventListener("mouseup", handleMouseUp);
+                    };
+                    document.addEventListener("mousemove", handleDrag);
+                    document.addEventListener("mouseup", handleMouseUp);
+                }
+            };
+
+            return (
+                <div className="flex h-screen w-screen bg-cyber-bg text-zinc-100 select-none">
+                    
+                    {/* LEFT SIDEBAR: Scan and List */}
+                    <div className="w-[360px] bg-cyber-card border-r border-cyber-border flex flex-col h-full">
+                        <div className="p-5 border-b border-cyber-border flex flex-col gap-3">
+                            <div className="flex items-center justify-center gap-2">
+                                <span className="h-2 w-2 rounded-full bg-tesla animate-pulse"></span>
+                                <h1 className="text-lg font-black tracking-widest text-white">TESLA CINEMA</h1>
+                            </div>
+                            <div className="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    className="bg-cyber-bg border border-cyber-border rounded px-3 py-1.5 text-xs flex-1 outline-none text-zinc-300 focus:border-tesla"
+                                    value={folderPath}
+                                    onChange={(e) => setFolderPath(e.target.value)}
+                                />
+                                <button 
+                                    onClick={() => handleScan(folderPath)}
+                                    className="bg-gradient-to-r from-tesla to-red-800 text-white rounded px-3 py-1.5 text-xs font-bold hover:brightness-110 active:brightness-95 transition-all"
+                                >
+                                    扫描
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Clips Scroll list */}
+                        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                            {clips.map((clip) => {
+                                const isSel = selectedClip && selectedClip.name === clip.name;
+                                return (
+                                    <div 
+                                        key={clip.name}
+                                        onClick={() => selectClip(clip)}
+                                        className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                                            isSel 
+                                            ? 'bg-gradient-to-r from-tesla to-red-950 border-tesla shadow-lg shadow-red-950/20' 
+                                            : 'bg-zinc-900/60 border-cyber-border hover:bg-zinc-800/40'
+                                        }`}
+                                    >
+                                        <div className="text-xs font-bold text-white truncate">{clip.name}</div>
+                                        <div className="text-[10px] text-cyber-muted mt-1 truncate">{clip.location}</div>
+                                        {clip.has_event && (
+                                            <div className="text-[9px] mt-1.5 inline-block px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium">
+                                                {reasonMap[clip.event.reason] || clip.event.reason}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            {clips.length === 0 && (
+                                <div className="text-xs text-cyber-muted text-center mt-20">暂未扫描到 TeslaCam 素材段</div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* RIGHT CONTENT STAGE */}
+                    <div className="flex-1 flex flex-col h-full p-6 overflow-hidden">
+                        
+                        {/* Header bar */}
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-3">
+                                <select 
+                                    className="bg-cyber-card border border-cyber-border text-white text-xs rounded px-3 py-1.5 font-bold outline-none cursor-pointer focus:border-tesla"
+                                    value={viewType}
+                                    onChange={(e) => {
+                                        setViewType(e.target.value);
+                                        setZoomedCam(null);
+                                    }}
+                                >
+                                    {viewLabels.map(opt => (
+                                        <option key={opt.id} value={opt.id}>{opt.label}</option>
+                                    ))}
+                                </select>
+                                {zoomedCam && (
+                                    <button 
+                                        onClick={() => setZoomedCam(null)}
+                                        className="text-[10px] bg-zinc-800 text-zinc-300 border border-cyber-border rounded px-2 py-1 font-semibold hover:bg-zinc-700"
+                                    >
+                                        返回网格布局
+                                    </button>
+                                )}
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                                <button 
+                                    onClick={handleDelete}
+                                    className="text-xs border border-red-500/40 text-red-400 hover:bg-red-500 hover:text-white rounded px-4 py-1.5 font-bold transition-all"
+                                >
+                                    删除片段
+                                </button>
+                                <button 
+                                    id="export-btn-web"
+                                    onClick={handleExport}
+                                    className="text-xs bg-gradient-to-r from-tesla to-red-800 text-white rounded px-4 py-1.5 font-bold hover:brightness-110 active:brightness-95 transition-all"
+                                >
+                                    严格导出
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* HUD Meta Card */}
+                        <div className="bg-cyber-card border border-cyber-border rounded-xl p-4 flex justify-between items-center mb-4">
+                            <div className="space-y-1.5">
+                                <div className="text-sm font-bold text-white flex items-center gap-2">
+                                    {selectedClip ? selectedClip.name : "未加载素材"}
+                                    <span className="text-xs text-cyber-muted font-normal">| {viewLabels.find(v => v.id === viewType)?.label}</span>
+                                </div>
+                                {selectedClip?.has_event && (
+                                    <div className="text-xs font-bold text-red-500 flex items-center gap-1.5">
+                                        <span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-ping"></span>
+                                        ⚠️ 关键事件: {reasonMap[selectedClip.event.reason] || selectedClip.event.reason} 
+                                        | 触发相机: {cameraLabels[selectedClip.event.camera] || selectedClip.event.camera}
+                                        {eventOffset && ` | 发生时间: ${fmtSec(eventOffset)}`}
+                                    </div>
+                                )}
+                                <div className="flex gap-6 text-[11px] text-cyber-muted">
+                                    <div>时间: {footage && footage.segments && footage.segments[currentSegIndex] ? footage.segments[currentSegIndex].name.replace('_', ' ') : '-'}</div>
+                                    <div>位置: {selectedClip ? selectedClip.location : '-'}</div>
+                                </div>
+                            </div>
+
+                            {/* Autopilot Speed / Telemetry indicators */}
+                            <div className="flex gap-4">
+                                <div className="bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-center min-w-[70px]">
+                                    <div className="text-[10px] text-cyber-muted uppercase">时速</div>
+                                    <div className="text-lg font-black text-emerald-400 font-mono">{telemetry.speed} <span className="text-[9px]">km/h</span></div>
+                                </div>
+                                <div className="bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-center min-w-[50px]">
+                                    <div className="text-[10px] text-cyber-muted uppercase">挡位</div>
+                                    <div className="text-lg font-black text-white font-mono">{telemetry.gear}</div>
+                                </div>
+                                <div className={`bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-center min-w-[70px] ${telemetry.ap === 'AP' || telemetry.ap === 'FSD' ? 'border-blue-500' : ''}`}>
+                                    <div className="text-[10px] text-cyber-muted uppercase">智驾</div>
+                                    <div className={`text-sm font-black mt-1 font-mono ${telemetry.ap === 'AP' || telemetry.ap === 'FSD' ? 'text-blue-400' : 'text-zinc-500'}`}>
+                                        {telemetry.ap}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* STAGE VIDEO GRID */}
+                        <div className="flex-1 bg-black rounded-2xl overflow-hidden border border-cyber-border relative flex flex-col justify-center">
+                            {footage ? (
+                                <div className="h-full w-full p-2 flex flex-col gap-2 bg-[#090a0d]">
+                                    
+                                    {/* 6-Grid Layout (3x2) */}
+                                    {(viewType === "grid6" && !zoomedCam) && (
+                                        <div className="flex-1 grid grid-cols-3 grid-rows-2 gap-2 h-full w-full">
+                                            {["left", "front", "right", "left_pillar", "back", "right_pillar"].map(cam => (
+                                                <div 
+                                                    key={cam} 
+                                                    className="bg-zinc-950 rounded-lg overflow-hidden border border-cyber-border relative group"
+                                                    onDoubleClick={() => setZoomedCam(cam)}
+                                                >
+                                                    <video 
+                                                        ref={el => videoRefs.current[cam] = el}
+                                                        src={getSegmentVideoUrl(cam)}
+                                                        className="h-full w-full object-cover"
+                                                        muted
+                                                        playsInline
+                                                    />
+                                                    <span className="absolute bottom-2 right-2 text-[10px] bg-cyber-bg/85 border border-cyber-border rounded px-2 py-0.5 text-zinc-300 pointer-events-none group-hover:scale-105 transition-all">
+                                                        {cameraLabels[cam]}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* 4-Grid Layout (2x2) */}
+                                    {(viewType === "grid4" && !zoomedCam) && (
+                                        <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-2 h-full w-full">
+                                            {["front", "back", "left", "right"].map(cam => (
+                                                <div 
+                                                    key={cam} 
+                                                    className="bg-zinc-950 rounded-lg overflow-hidden border border-cyber-border relative group"
+                                                    onDoubleClick={() => setZoomedCam(cam)}
+                                                >
+                                                    <video 
+                                                        ref={el => videoRefs.current[cam] = el}
+                                                        src={getSegmentVideoUrl(cam)}
+                                                        className="h-full w-full object-cover"
+                                                        muted
+                                                        playsInline
+                                                    />
+                                                    <span className="absolute bottom-2 right-2 text-[10px] bg-cyber-bg/85 border border-cyber-border rounded px-2 py-0.5 text-zinc-300 pointer-events-none group-hover:scale-105 transition-all">
+                                                        {cameraLabels[cam]}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* grid4old Layout (Front on top, others at bottom) */}
+                                    {(viewType === "grid4old" && !zoomedCam) && (
+                                        <div className="flex-1 flex flex-col gap-2 h-full w-full">
+                                            <div 
+                                                className="flex-[3] bg-zinc-950 rounded-lg overflow-hidden border border-cyber-border relative group"
+                                                onDoubleClick={() => setZoomedCam("front")}
+                                            >
+                                                <video 
+                                                    ref={el => videoRefs.current["front"] = el}
+                                                    src={getSegmentVideoUrl("front")}
+                                                    className="h-full w-full object-cover"
+                                                    muted
+                                                    playsInline
+                                                />
+                                                <span className="absolute bottom-2 right-2 text-[10px] bg-cyber-bg/85 border border-cyber-border rounded px-2 py-0.5 text-zinc-300 pointer-events-none group-hover:scale-105 transition-all">
+                                                    {cameraLabels["front"]}
+                                                </span>
+                                            </div>
+                                            <div className="flex-[2] grid grid-cols-3 gap-2">
+                                                {["left", "back", "right"].map(cam => (
+                                                    <div 
+                                                        key={cam} 
+                                                        className="bg-zinc-950 rounded-lg overflow-hidden border border-cyber-border relative group"
+                                                        onDoubleClick={() => setZoomedCam(cam)}
+                                                    >
+                                                        <video 
+                                                            ref={el => videoRefs.current[cam] = el}
+                                                            src={getSegmentVideoUrl(cam)}
+                                                            className="h-full w-full object-cover"
+                                                            muted
+                                                            playsInline
+                                                        />
+                                                        <span className="absolute bottom-2 right-2 text-[10px] bg-cyber-bg/85 border border-cyber-border rounded px-2 py-0.5 text-zinc-300 pointer-events-none group-hover:scale-105 transition-all">
+                                                            {cameraLabels[cam]}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Single Cam View or Zoomed Cam View */}
+                                    {(zoomedCam || (!["grid6", "grid4", "grid4old"].includes(viewType))) && (
+                                        <div 
+                                            className="flex-1 bg-zinc-950 rounded-xl overflow-hidden border border-cyber-border relative group h-full w-full"
+                                            onDoubleClick={() => zoomedCam ? setZoomedCam(null) : null}
+                                        >
+                                            <video 
+                                                ref={el => videoRefs.current[zoomedCam || viewType] = el}
+                                                src={getSegmentVideoUrl(zoomedCam || viewType)}
+                                                className="h-full w-full object-contain"
+                                                muted
+                                                playsInline
+                                            />
+                                            <span className="absolute bottom-3 right-3 text-xs bg-cyber-bg/85 border border-cyber-border rounded-md px-3 py-1 text-zinc-300 pointer-events-none group-hover:scale-105 transition-all">
+                                                {cameraLabels[zoomedCam || viewType]}
+                                            </span>
+                                        </div>
+                                    )}
+
+                                </div>
+                            ) : (
+                                <div className="text-zinc-500 text-xs text-center">暂未加载播放素材。请在左侧导入或选择片段。</div>
+                            )}
+                        </div>
+
+                        {/* PLAYBACK CONTROLS */}
+                        <div className="mt-4 flex gap-4 items-center">
+                            <button 
+                                onClick={() => jump(-5)} 
+                                className="bg-cyber-card border border-cyber-border rounded-lg h-9 w-12 flex items-center justify-center text-sm hover:border-tesla active:scale-95 transition-all"
+                            >
+                                ⏪
+                            </button>
+                            <button 
+                                onClick={togglePlay} 
+                                className="bg-cyber-card border border-cyber-border rounded-lg h-9 px-6 flex items-center justify-center gap-2 text-sm hover:border-tesla text-white font-bold active:scale-95 transition-all min-w-[90px]"
+                            >
+                                {isPlaying ? "⏸ 暂停" : "▶ 播放"}
+                            </button>
+                            <button 
+                                onClick={() => jump(5)} 
+                                className="bg-cyber-card border border-cyber-border rounded-lg h-9 w-12 flex items-center justify-center text-sm hover:border-tesla active:scale-95 transition-all"
+                            >
+                                ⏩
+                            </button>
+
+                            {/* Unified master Timeline slider */}
+                            <div className="flex-1 flex flex-col gap-1">
+                                <div 
+                                    onMouseDown={handleSliderMouseDown}
+                                    className="bg-cyber-card border border-cyber-border h-8 rounded-lg relative cursor-ew-resize flex items-center overflow-hidden"
+                                >
+                                    {footage && (
+                                        <>
+                                            {/* Track selected range */}
+                                            <div 
+                                                className="bg-tesla/20 absolute h-full border-l border-r border-tesla/60"
+                                                style={{
+                                                    left: `${(trimIn / footage.duration) * 100}%`,
+                                                    width: `${((trimOut - trimIn) / footage.duration) * 100}%`
+                                                }}
+                                            />
+
+                                            {/* Sentry Warning Event Diamond */}
+                                            {eventOffset && (
+                                                <div 
+                                                    className="absolute h-3 w-3 bg-amber-500 rotate-45 border border-white -translate-x-1.5 shadow shadow-amber-500"
+                                                    style={{ left: `${(eventOffset / footage.duration) * 100}%` }}
+                                                />
+                                            )}
+
+                                            {/* Playhead indicator */}
+                                            <div 
+                                                className="absolute h-full w-[2px] bg-white flex flex-col items-center"
+                                                style={{ left: `${(currentTime / footage.duration) * 100}%` }}
+                                            >
+                                                <span className="h-2 w-2 rounded-full bg-white -translate-y-0.5"></span>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                                <div className="flex justify-between text-[10px] text-cyber-muted font-mono px-1">
+                                    <span>从 {fmtSec(trimIn)}</span>
+                                    <span className="text-white font-semibold">进度: {fmtSec(currentTime)} / {footage ? fmtSec(footage.duration) : '00:00'}</span>
+                                    <span>至 {fmtSec(trimOut)}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* BOTTOM Telemetry Grid & Map */}
+                        <div className="mt-4 h-[130px] flex gap-4 overflow-hidden">
+                            {/* GPS Telemetry Map Canvas card */}
+                            <div className="flex-1 bg-cyber-card border border-cyber-border rounded-xl p-3 flex gap-4 overflow-hidden">
+                                <div className="h-full aspect-[4/3] rounded-lg overflow-hidden bg-black relative border border-cyber-border">
+                                    <canvas 
+                                        ref={canvasRef} 
+                                        width={160} 
+                                        height={100}
+                                        className="h-full w-full"
+                                    />
+                                </div>
+                                <div className="flex-1 flex flex-col justify-center gap-1.5 text-[11px] text-cyber-muted">
+                                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                                        <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full animate-ping"></span>
+                                        实时卫星定位
+                                    </div>
+                                    <div>经度 (Lon): <span className="font-mono text-zinc-300">{telemetry.lon ? telemetry.lon.toFixed(6) : '-'}</span></div>
+                                    <div>纬度 (Lat): <span className="font-mono text-zinc-300">{telemetry.lat ? telemetry.lat.toFixed(6) : '-'}</span></div>
+                                </div>
+                            </div>
+
+                            {/* Drive Autopilot Telemetry card */}
+                            <div className="w-[320px] bg-cyber-card border border-cyber-border rounded-xl p-3 flex flex-col justify-center gap-3">
+                                <div className="text-xs font-bold text-white">行车底盘动态</div>
+                                <div className="space-y-2">
+                                    {/* Steering angle */}
+                                    <div className="flex items-center justify-between text-[11px]">
+                                        <span>方向盘转角</span>
+                                        <span className="font-mono font-bold text-white">{telemetry.steering.toFixed(1)}°</span>
+                                    </div>
+                                    
+                                    {/* Throttle & Brake overlays */}
+                                    <div className="flex gap-4">
+                                        <div className="flex-1">
+                                            <div className="flex justify-between text-[9px] text-cyber-muted mb-0.5">
+                                                <span>加速踏板</span>
+                                                <span>{telemetry.throttle}%</span>
+                                            </div>
+                                            <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                                                <div className="bg-emerald-500 h-full transition-all duration-75" style={{ width: `${telemetry.throttle}%` }} />
+                                            </div>
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex justify-between text-[9px] text-cyber-muted mb-0.5">
+                                                <span>制动踏板</span>
+                                                <span>{telemetry.brake}%</span>
+                                            </div>
+                                            <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                                                <div className="bg-red-500 h-full transition-all duration-75" style={{ width: `${telemetry.brake}%` }} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                </div>
+            );
+        }
+
+        // Render React Application
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

@@ -20,6 +20,26 @@ def parse_time(text: str | None) -> str:
     return f"{ymd} {hour}:{minute}:{second}"
 
 
+def wall_clock_text(segment_name: str, offset_in_segment: float = 0.0) -> str:
+    """Absolute wall-clock time for a point inside a TeslaCam segment.
+
+    Segment names are ``YYYY-MM-DD_HH-MM-SS``; *offset_in_segment* advances that
+    base time so mid-segment timestamps stay honest in HUD and exports.
+    """
+    base = (segment_name or "")[:19]
+    if len(base) < 19:
+        return parse_time(segment_name)
+    try:
+        from datetime import datetime, timedelta
+
+        dt = datetime.strptime(base, "%Y-%m-%d_%H-%M-%S")
+        if offset_in_segment > 0:
+            dt = dt + timedelta(seconds=float(offset_in_segment))
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return parse_time(segment_name)
+
+
 def resolve_clip_type(parent_name: str) -> str:
     lowered = parent_name.lower()
     if "recent" in lowered:
@@ -47,14 +67,10 @@ def resolve_cam_name(file_name: str) -> CamName | None:
 
 
 def camera_labels() -> dict[CamName, str]:
-    return {
-        "front": "Front",
-        "back": "Rear",
-        "left": "Left",
-        "right": "Right",
-        "left_pillar": "L-Pillar",
-        "right_pillar": "R-Pillar",
-    }
+    """Backward-compatible re-export of domain layout labels."""
+    from tesla_cinema.domain.layout import camera_labels as _labels
+
+    return _labels()
 
 
 def read_event(path: Path) -> CamClipEvent | None:
@@ -73,18 +89,101 @@ def read_event(path: Path) -> CamClipEvent | None:
     )
 
 
-def scan_teslacam_folder(folder: Path) -> list[CamClip]:
+# RecentClips is a flat dump of ~1‑minute multi-cam slices. Group consecutive
+# stamps into sessions when the gap between stamps stays under this threshold.
+RECENT_SESSION_GAP_SECONDS = 180.0
+
+
+def _stamp_to_epoch(stamp: str) -> float | None:
+    """Parse ``YYYY-MM-DD_HH-MM-SS`` (19 chars) to epoch seconds."""
+    if len(stamp) < 19:
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.strptime(stamp[:19], "%Y-%m-%d_%H-%M-%S").timestamp()
+    except Exception:
+        return None
+
+
+def _split_recent_videos(videos: list[Path]) -> list[list[Path]]:
+    """Split a flat RecentClips video list into contiguous drive sessions."""
+    if not videos:
+        return []
+    # Bucket by segment stamp (first 19 chars of filename).
+    by_stamp: dict[str, list[Path]] = {}
+    for path in videos:
+        stamp = path.name[:19]
+        by_stamp.setdefault(stamp, []).append(path)
+
+    stamps = sorted(by_stamp.keys())
+    sessions: list[list[Path]] = []
+    current: list[Path] = []
+    prev_epoch: float | None = None
+
+    for stamp in stamps:
+        epoch = _stamp_to_epoch(stamp)
+        if (
+            current
+            and prev_epoch is not None
+            and epoch is not None
+            and (epoch - prev_epoch) > RECENT_SESSION_GAP_SECONDS
+        ):
+            sessions.append(current)
+            current = []
+        current.extend(by_stamp[stamp])
+        if epoch is not None:
+            prev_epoch = epoch
+
+    if current:
+        sessions.append(current)
+    return sessions
+
+
+def scan_teslacam_folder(
+    folder: Path,
+    *,
+    include_recent: bool = False,
+) -> list[CamClip]:
+    """Index Saved / Sentry event folders.
+
+    RecentClips is a flat rolling buffer (often 1000+ files). Loading it freezes
+    the UI and confuses the sidebar, so it is **skipped by default**. Pass
+    ``include_recent=True`` to also split it into contiguous sessions.
+    """
     clip_map: dict[str, CamClip] = {}
+    recent_videos: list[Path] = []
+    recent_misc: list[Path] = []
+
     for path in folder.rglob("*"):
         if not path.is_file():
             continue
         parent_name = path.parent.name
         if not parent_name:
             continue
-        clip_key = RECENT_DIR_NAME if parent_name == RECENT_DIR_NAME else parent_name
+
+        # ---- RecentClips: optional ----
+        if parent_name == RECENT_DIR_NAME or (
+            path.parent.parent and path.parent.parent.name == RECENT_DIR_NAME
+        ):
+            if not include_recent:
+                continue
+            if path.parent.name == RECENT_DIR_NAME:
+                if path.suffix.lower() == ".mp4":
+                    recent_videos.append(path)
+                else:
+                    recent_misc.append(path)
+                continue
+
+        # ---- Saved / Sentry (and any other event subfolder) ----
+        clip_key = parent_name
+        parent_of_parent = path.parent.parent.name if path.parent.parent else ""
         clip = clip_map.setdefault(
             clip_key,
-            CamClip(name=clip_key, type=resolve_clip_type(path.parent.parent.name if parent_name != RECENT_DIR_NAME else RECENT_DIR_NAME)),
+            CamClip(
+                name=clip_key,
+                type=resolve_clip_type(parent_of_parent),  # type: ignore[arg-type]
+            ),
         )
         clip.source_paths.append(path)
         if path.name == "thumb.png":
@@ -93,11 +192,39 @@ def scan_teslacam_folder(folder: Path) -> list[CamClip]:
             clip.videos.append(path)
         elif path.name == "event.json":
             clip.event = read_event(path)
-    clips = [clip for clip in clip_map.values() if clip.videos]
+
+    clips: list[CamClip] = [c for c in clip_map.values() if c.videos]
+
+    if include_recent:
+        for session_videos in _split_recent_videos(recent_videos):
+            session_videos = sorted(session_videos, key=lambda p: p.name)
+            if not session_videos:
+                continue
+            name = session_videos[0].name[:19]
+            clip_name = name
+            suffix = 1
+            existing_names = {c.name for c in clips}
+            while clip_name in existing_names:
+                suffix += 1
+                clip_name = f"{name}-recent{suffix}"
+            clips.append(
+                CamClip(
+                    name=clip_name,
+                    type="recent",
+                    videos=session_videos,
+                    source_paths=list(session_videos),
+                )
+            )
+        if recent_misc:
+            recent_clips = [c for c in clips if c.type == "recent"]
+            if recent_clips:
+                newest = max(recent_clips, key=lambda c: c.name)
+                newest.source_paths.extend(recent_misc)
+
     for clip in clips:
         clip.source_paths = sorted(set(clip.source_paths))
-        if clip.name == RECENT_DIR_NAME and clip.videos:
-            clip.name = clip.videos[0].name[:19]
+        clip.videos = sorted(set(clip.videos), key=lambda p: p.name)
+
     clips.sort(key=lambda item: item.name, reverse=True)
     return clips
 
@@ -110,21 +237,24 @@ def probe_duration(path: Path) -> float:
             pos = 0
             while pos + 8 <= file_size:
                 f.seek(pos)
-                raw = f.read(16)
-                if len(raw) < 8:
+                header = f.read(8)
+                if len(header) < 8:
                     break
-                size = int.from_bytes(raw[0:4], "big")
-                box_type = raw[4:8]
+                size = int.from_bytes(header[0:4], "big")
+                box_type = header[4:8]
                 h = 8
                 if size == 1:
-                    if len(raw) < 16:
+                    # 64-bit largesize follows the 8-byte header.
+                    largesize = f.read(8)
+                    if len(largesize) < 8:
                         break
-                    size = int.from_bytes(raw[8:16], "big")
+                    size = int.from_bytes(largesize, "big")
                     h = 16
                 elif size == 0:
                     size = file_size - pos
                 if box_type == b"moov":
-                    moov_data = f.read(min(size - h, 131072))
+                    # File pointer is exactly at the start of the moov payload.
+                    moov_data = f.read(min(max(size - h, 0), 131072))
                     dur = _mvhd_duration(moov_data)
                     if dur is not None:
                         return dur
@@ -164,7 +294,8 @@ def _mvhd_duration(moov: bytes) -> float | None:
     return None
 
 
-def build_footage(clip: CamClip) -> CamFootage:
+def build_footage(clip: CamClip, *, include_sei: bool = True) -> CamFootage:
+    """Build segment timeline. SEI can be deferred for snappy UI open."""
     segment_map: dict[str, CamSegment] = {}
     for video in clip.videos:
         seg_name = video.name[:19]
@@ -184,7 +315,7 @@ def build_footage(clip: CamClip) -> CamFootage:
         segment.start_seconds = total_duration
         total_duration += segment.duration
 
-    sei_data = extract_clip_sei(clip, segments)
+    sei_data = extract_clip_sei(clip, segments) if include_sei else []
     return CamFootage(segments=segments, duration=total_duration, sei_data=sei_data)
 
 
