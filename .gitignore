@@ -27,3 +27,19 @@ __pycache__/
 /release
 /dist-electron
 /release-new
+
+# Python legacy / tools
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local agent workspace / debug artifacts
+.claude/
+
+# Test artifacts
+test-results/
+playwright-report/
+ui-shots/
+dev-run.log
