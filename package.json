@@ -3,6 +3,7 @@
   "private": true,
   "description": "A modern Tesla Dashcam viewer for desktop",
   "author": "User",
+  "license": "GPL-3.0-only",
   "version": "1.1.0",
   "type": "module",
   "main": "dist-electron/main.js",
