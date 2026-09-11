@@ -6,7 +6,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](#下载)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-orange)](https://github.com/Guyungy/Tesla-cam/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-orange)](https://github.com/Guyungy/Tesla-cam/releases)
 [![Electron](https://img.shields.io/badge/Electron-40-47848F?logo=electron&logoColor=white)](#技术栈)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](#技术栈)
 
