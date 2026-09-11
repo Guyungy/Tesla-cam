@@ -37,6 +37,7 @@ venv/
 
 # Local agent workspace / debug artifacts
 .claude/
+.workbuddy/
 
 # Test artifacts
 test-results/
