@@ -134,38 +134,74 @@ function escPathValue(p: string): string {
   return `'${p.replace(/\\/g, '/').replace(/:/g, '\\:')}'`;
 }
 
-const CJK_RE = /[\u3000-\u9fff\uf900-\ufaff]/;
+const CJK_RE =
+  /[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]/;
 
-/** Resolve a system font so drawtext works with ffmpeg-static builds. */
-function resolveFontFile(needsCJK: boolean): string | undefined {
-  const win = needsCJK
-    ? ['C:\\Windows\\Fonts\\msyh.ttc', 'C:\\Windows\\Fonts\\arial.ttf']
-    : [
-        'C:\\Windows\\Fonts\\arial.ttf',
-        'C:\\Windows\\Fonts\\segoeui.ttf',
-        'C:\\Windows\\Fonts\\msyh.ttc',
-      ];
-  const mac = needsCJK
-    ? [
-        '/System/Library/Fonts/PingFang.ttc',
-        '/System/Library/Fonts/Supplemental/Arial.ttf',
-      ]
-    : [
-        '/System/Library/Fonts/Supplemental/Arial.ttf',
-        '/System/Library/Fonts/Helvetica.ttc',
-      ];
-  const linux = [
+/**
+ * Font files we try, most-wanted first, for text that may contain CJK.
+ * A font missing from this list is not fatal: `scanForCJKFont` then looks for
+ * any CJK-capable face in the platform's font directories.
+ */
+const CJK_FONT_CANDIDATES: Record<string, string[]> = {
+  win32: [
+    'C:\\Windows\\Fonts\\msyh.ttc',
+    'C:\\Windows\\Fonts\\msyh.ttf',
+    'C:\\Windows\\Fonts\\simhei.ttf',
+    'C:\\Windows\\Fonts\\simsun.ttc',
+    'C:\\Windows\\Fonts\\Deng.ttf',
+  ],
+  darwin: [
+    '/System/Library/Fonts/PingFang.ttc',
+    '/System/Library/Fonts/Hiragino Sans GB.ttc',
+    '/System/Library/Fonts/STHeiti Medium.ttc',
+    '/System/Library/Fonts/STHeiti Light.ttc',
+    '/System/Library/Fonts/Supplemental/Songti.ttc',
+    '/Library/Fonts/Arial Unicode.ttf',
+  ],
+  linux: [
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
+    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+    '/usr/share/fonts/truetype/arphic/uming.ttc',
+  ],
+};
+
+/** Latin-only faces, used for text we know is ASCII (e.g. the clock). */
+const LATIN_FONT_CANDIDATES: Record<string, string[]> = {
+  win32: ['C:\\Windows\\Fonts\\arial.ttf', 'C:\\Windows\\Fonts\\segoeui.ttf'],
+  darwin: [
+    '/System/Library/Fonts/Supplemental/Arial.ttf',
+    '/System/Library/Fonts/Helvetica.ttc',
+  ],
+  linux: [
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-  ];
-  const candidates =
-    process.platform === 'win32'
-      ? win
-      : process.platform === 'darwin'
-        ? mac
-        : linux;
-  for (const p of candidates) {
+  ],
+};
+
+/** Directories to sweep when none of the well-known paths exist. */
+const FONT_DIRS: Record<string, string[]> = {
+  win32: ['C:\\Windows\\Fonts'],
+  darwin: [
+    '/System/Library/Fonts',
+    '/System/Library/Fonts/Supplemental',
+    '/Library/Fonts',
+    path.join(os.homedir(), 'Library/Fonts'),
+  ],
+  linux: [
+    '/usr/share/fonts',
+    '/usr/local/share/fonts',
+    path.join(os.homedir(), '.local/share/fonts'),
+  ],
+};
+
+/** Filenames (no directory) that imply a face carrying CJK glyphs. */
+const CJK_FONT_FILE_RE =
+  /(PingFang|Hiragino.?Sans|Heiti|Songti|Kaiti|Yuanti|Lantinghei|YaHei|SimSun|SimHei|Deng|Song|FangSong|NotoSansCJK|NotoSerifCJK|SourceHanSans|SourceHanSerif|WenQuanYi|wqy|uming|ukai|Arial.?Unicode|Malgun|Meiryo|MS.?Gothic)/i;
+
+function firstExisting(paths: string[]): string | undefined {
+  for (const p of paths) {
     try {
       if (fs.existsSync(p)) return p;
     } catch {
@@ -173,6 +209,87 @@ function resolveFontFile(needsCJK: boolean): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Last-resort sweep of the platform's font directories for a CJK-capable face.
+ * macOS no longer ships PingFang at a fixed path on every release (it can live
+ * only in an on-demand asset), so hard-coding paths alone silently degrades to
+ * a Latin font — and every CJK glyph renders as a tofu box.
+ */
+function scanForCJKFont(): string | undefined {
+  const dirs = FONT_DIRS[process.platform] ?? [];
+  const found: string[] = [];
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (!/\.(ttf|ttc|otf|otc)$/i.test(name)) continue;
+      if (!CJK_FONT_FILE_RE.test(name)) continue;
+      const full = path.join(dir, name);
+      try {
+        if (fs.statSync(full).isFile()) found.push(full);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  // Prefer a regular-weight face over bold/light variants when both exist.
+  found.sort((a, b) => {
+    const score = (p: string) =>
+      /light|thin|ultralight|black|heavy|bold|medium/i.test(path.basename(p))
+        ? 1
+        : 0;
+    return score(a) - score(b);
+  });
+  return found[0];
+}
+
+/**
+ * Resolve a system font so drawtext works with ffmpeg-static builds.
+ * Memoized: the result cannot change while the app runs, and the filtergraph
+ * asks for a font once per drawtext.
+ */
+const fontCache = new Map<string, string | undefined>();
+
+function resolveFontFile(needsCJK: boolean): string | undefined {
+  const key = needsCJK ? 'cjk' : 'latin';
+  if (fontCache.has(key)) return fontCache.get(key);
+
+  const platform = process.platform;
+  let font = firstExisting(
+    (needsCJK ? CJK_FONT_CANDIDATES : LATIN_FONT_CANDIDATES)[platform] ?? [],
+  );
+  if (!font && needsCJK) font = scanForCJKFont();
+  if (!font) {
+    // Never leave text without a fontfile: ffmpeg-static may have no
+    // fontconfig config, and drawtext then fails the whole export.
+    font = firstExisting(
+      (needsCJK ? LATIN_FONT_CANDIDATES : CJK_FONT_CANDIDATES)[platform] ?? [],
+    );
+  }
+  if (!font) font = scanForCJKFont();
+  if (!font) font = firstExisting(LATIN_FONT_CANDIDATES[platform] ?? []);
+
+  if (needsCJK && font && !CJK_FONT_FILE_RE.test(path.basename(font))) {
+    warnNoCJKFont(font);
+  }
+  fontCache.set(key, font);
+  return font;
+}
+
+let cjkWarningLogged = false;
+function warnNoCJKFont(fallback: string): void {
+  if (cjkWarningLogged) return;
+  cjkWarningLogged = true;
+  console.warn(
+    `[composeExport] No CJK-capable font found; falling back to ${fallback}. ` +
+      'Chinese/Japanese/Korean overlay text will render as boxes.',
+  );
 }
 
 /**

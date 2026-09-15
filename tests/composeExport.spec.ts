@@ -6,6 +6,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { spawnSync } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import { createRequire } from 'module';
 import os from 'os';
@@ -91,8 +92,21 @@ function makeRequest(
   };
 }
 
-/** Average luma of a cropped region at a given time (16 ≈ pure black). */
-function regionLuma(file: string, crop: string, at: number): number {
+/** Read a drawtext textfile, tolerating a filter that has none. */
+function readOr(file?: string): string {
+  if (!file) return '';
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/** Average luma of a cropped region at a given time (16 ≈ pure black). */ function regionLuma(
+  file: string,
+  crop: string,
+  at: number,
+): number {
   const r = spawnSync(
     ffmpeg,
     [
@@ -313,6 +327,118 @@ test('a real overlay icon is added as the last input', () => {
   const inputs = prepared.args.filter((a) => a === '-i').length;
   expect(prepared.args[prepared.args.lastIndexOf('-i') + 1]).toBe(icon);
   expect(graphOf(prepared)).toContain(`[${inputs - 1}:v]scale=`);
+  if (prepared.tmpDir)
+    fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
+});
+
+/**
+ * CJK text must land on a face that actually has the glyphs.
+ *
+ * The luma assertions above are blind to the failure this guards against: a
+ * tofu box is just as bright as a real glyph. macOS dropped PingFang from the
+ * fixed `/System/Library/Fonts/PingFang.ttc` path on some releases, the
+ * resolver fell through to Arial, and every 年/月/日 and Chinese place name in
+ * the exported bar rendered as boxes while the tests stayed green.
+ */
+test('CJK overlay text resolves to a CJK-capable font, not a Latin fallback', () => {
+  const prepared = prepareComposeExport(
+    makeRequest('front', { layout: testLayout('front') }),
+    path.join(tmpRoot, 'font.mp4'),
+  );
+  const cjkFaceRe =
+    /(PingFang|Hiragino.?Sans|Heiti|Songti|Kaiti|YaHei|SimSun|SimHei|NotoSansCJK|NotoSerifCJK|SourceHanSans|WenQuanYi|Arial.?Unicode)/i;
+
+  let checked = 0;
+  for (const filter of graphOf(prepared).split(';')) {
+    if (!filter.includes('drawtext=')) continue;
+    const textFile = filter.match(/textfile='([^']+)'/)?.[1];
+    if (!textFile) continue;
+    const text = fs.readFileSync(textFile, 'utf8');
+    if (!/[\u3000-\u9fff]/.test(text)) continue;
+
+    checked++;
+    const font = filter.match(/fontfile='([^']+)'/)?.[1];
+    expect(font, `no fontfile for CJK text ${text}`).toBeTruthy();
+    const fontPath = font!.replace(/\\:/g, ':');
+    expect(fs.existsSync(fontPath), `${fontPath} must exist`).toBe(true);
+    expect(
+      path.basename(fontPath),
+      `"${text}" needs a CJK-capable face`,
+    ).toMatch(cjkFaceRe);
+  }
+  expect(checked, 'the request must exercise CJK overlay text').toBeGreaterThan(
+    0,
+  );
+
+  if (prepared.tmpDir)
+    fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
+});
+
+/**
+ * …and the resolved face must genuinely differ from a Latin-only one. A `.ttc`
+ * opens on face 0, so a collection whose first face has no ideographs would
+ * pass the name check above and still draw boxes.
+ */
+test('the resolved CJK font renders different pixels than a Latin face', () => {
+  const latin = {
+    darwin: '/System/Library/Fonts/Supplemental/Arial.ttf',
+    win32: 'C:\\Windows\\Fonts\\arial.ttf',
+  }[process.platform as string];
+  test.skip(
+    !latin || !fs.existsSync(latin),
+    'no Latin-only reference font on this platform',
+  );
+
+  const prepared = prepareComposeExport(
+    makeRequest('front', { layout: testLayout('front') }),
+    path.join(tmpRoot, 'font-pixels.mp4'),
+  );
+  const cjk = graphOf(prepared)
+    .split(';')
+    .filter((f) => f.includes('drawtext='))
+    .map((f) => ({
+      font: f.match(/fontfile='([^']+)'/)?.[1],
+      textFile: f.match(/textfile='([^']+)'/)?.[1],
+    }))
+    .find(
+      (d) => d.font && d.textFile && /[\u3000-\u9fff]/.test(readOr(d.textFile)),
+    );
+  expect(cjk, 'a CJK drawtext must exist').toBeTruthy();
+
+  const text = readOr(cjk!.textFile);
+  const render = (font: string) => {
+    const out = path.join(tmpRoot, `glyphs-${path.basename(font)}.png`);
+    const r = spawnSync(
+      ffmpeg,
+      [
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=black:s=900x80:d=1',
+        '-frames:v',
+        '1',
+        '-vf',
+        `drawtext=fontfile='${font.replace(/:/g, '\\:')}':textfile='${cjk!.textFile}':expansion=none:fontcolor=white:fontsize=34:x=10:y=20`,
+        out,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(r.status, `render with ${font}: ${r.stderr}`).toBe(0);
+    return crypto
+      .createHash('sha256')
+      .update(fs.readFileSync(out))
+      .digest('hex');
+  };
+
+  expect(
+    render(cjk!.font!.replace(/\\:/g, ':')),
+    `"${text}" rendered identically with the Latin font — the resolved face has no ideographs`,
+  ).not.toBe(render(latin!));
+
   if (prepared.tmpDir)
     fs.rmSync(prepared.tmpDir, { recursive: true, force: true });
 });
