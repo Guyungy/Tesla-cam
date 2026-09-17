@@ -15,3 +15,4 @@ export * from './Toast';
 export * from './TripReport';
 export * from './TslMark';
 export * from './Viewer';
+export * from './WheelScan';

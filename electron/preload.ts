@@ -4,6 +4,11 @@ import type {
   ComposeExportRequest,
   ComposeProgressEvent,
 } from './composeTypes.js';
+import type {
+  VisionScanProgress,
+  VisionScanRequest,
+  VisionScanResult,
+} from './visionTypes.js';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
@@ -18,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   trashFiles: (paths: string[], clipName: string) =>
     ipcRenderer.invoke('trash-files', { paths, clipName }),
+  autoLoadTeslaDrive: () => ipcRenderer.invoke('auto-load-tesla-drive'),
 
   // SEI telemetry cache (renderer extracts, main process persists)
   seiCacheRead: (key: string): Promise<unknown> =>
@@ -27,6 +33,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   seiCacheDelete: (key: string): Promise<unknown> =>
     ipcRenderer.invoke('sei-cache-delete', { key }),
   seiCacheClear: (): Promise<unknown> => ipcRenderer.invoke('sei-cache-clear'),
+
+  // Offline left-wheel visual candidate scan
+  visionScanStart: (payload: VisionScanRequest): Promise<VisionScanResult> =>
+    ipcRenderer.invoke('vision-scan-start', payload),
+  visionScanCancel: (sessionId: string) =>
+    ipcRenderer.send('vision-scan-cancel', { sessionId }),
+  visionThumbnail: (
+    filePath: string,
+    seconds: number,
+  ): Promise<string | null> =>
+    ipcRenderer.invoke('vision-thumbnail', { filePath, seconds }),
+  onVisionScanProgress: (callback: (data: VisionScanProgress) => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      data: VisionScanProgress,
+    ) => callback(data);
+    ipcRenderer.on('vision-scan-progress', listener);
+    return () => ipcRenderer.removeListener('vision-scan-progress', listener);
+  },
 
   // Fast compose export (source files → FFmpeg filter_complex)
   exportCompose: (payload: ComposeExportRequest) =>

@@ -7,6 +7,11 @@ import type {
   ComposeExportResult,
   ComposeProgressEvent,
 } from '../electron/composeTypes';
+import type {
+  VisionScanProgress,
+  VisionScanRequest,
+  VisionScanResult,
+} from '../electron/visionTypes';
 import type { SEIDataPoint } from './utils/types';
 
 declare global {
@@ -31,12 +36,30 @@ declare global {
         /** True when the drive has no Recycle Bin and files were erased. */
         permanent?: boolean;
       }>;
+      autoLoadTeslaDrive: () => Promise<{
+        ok: boolean;
+        found: boolean;
+        directory?: string;
+        error?: string;
+      }>;
 
       // SEI telemetry cache — extraction results persisted across restarts
       seiCacheRead: (key: string) => Promise<unknown>;
       seiCacheWrite: (key: string, points: SEIDataPoint[]) => Promise<unknown>;
       seiCacheDelete: (key: string) => Promise<unknown>;
       seiCacheClear: () => Promise<unknown>;
+
+      visionScanStart: (
+        payload: VisionScanRequest,
+      ) => Promise<VisionScanResult>;
+      visionScanCancel: (sessionId: string) => void;
+      visionThumbnail: (
+        filePath: string,
+        seconds: number,
+      ) => Promise<string | null>;
+      onVisionScanProgress: (
+        callback: (data: VisionScanProgress) => void,
+      ) => () => void;
 
       // Fast compose export
       exportCompose: (

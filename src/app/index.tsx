@@ -58,6 +58,7 @@ export function App() {
     }
   });
   const inputEl = useRef<HTMLInputElement>(null);
+  const autoLoadAttemptedRef = useRef(false);
 
   useEffect(() => {
     if (inputEl.current) {
@@ -96,6 +97,17 @@ export function App() {
     },
     [],
   );
+
+  // Desktop app: the Tesla USB uses a fixed volume name, so Chromium can
+  // populate this directory input with native File objects on startup. The
+  // normal picker remains the fallback when the drive is absent or unreadable.
+  useEffect(() => {
+    if (autoLoadAttemptedRef.current) return;
+    autoLoadAttemptedRef.current = true;
+    void window.electronAPI?.autoLoadTeslaDrive?.().then((result) => {
+      if (result?.ok) console.log(`[AutoLoad] Loaded ${result.directory}`);
+    });
+  }, []);
 
   // ── Drag & Drop ──
   const dragCountRef = useRef(0);
@@ -175,6 +187,7 @@ export function App() {
 
       {/* Hidden File Input */}
       <input
+        id="teslacam-directory-input"
         className="hidden"
         style={{ display: 'none' }}
         ref={inputEl}

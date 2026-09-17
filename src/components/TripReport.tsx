@@ -47,10 +47,11 @@ export function TripReport({ data, startTimeMs }: Props) {
     return (
       <button
         onClick={() => setCollapsed(false)}
-        className="glass-panel absolute right-3 bottom-3 z-20 rounded-lg p-2 text-neutral-400 transition-colors hover:text-white"
+        className="glass-panel ml-auto inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-neutral-400 transition-colors hover:text-white"
         title={t('trip.title')}
       >
         <IoSpeedometerOutline size={16} />
+        {t('trip.title')}
       </button>
     );
   }
@@ -79,9 +80,10 @@ export function TripReport({ data, startTimeMs }: Props) {
   ];
 
   return (
-    <div className="glass-panel absolute right-3 bottom-3 z-20 w-[262px] overflow-hidden rounded-xl border border-white/10">
-      <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5">
-        <span className="text-[10px] font-semibold tracking-widest text-neutral-400 uppercase">
+    <div className="glass-panel mx-auto flex w-full max-w-6xl items-center gap-4 overflow-hidden rounded-xl border border-white/10 px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-r border-white/5 pr-3">
+        <IoSpeedometerOutline className="text-neutral-500" size={15} />
+        <span className="text-[10px] font-semibold tracking-widest whitespace-nowrap text-neutral-400 uppercase">
           {t('trip.title')}
         </span>
         <button
@@ -93,7 +95,7 @@ export function TripReport({ data, startTimeMs }: Props) {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 py-2">
+      <div className="grid min-w-0 flex-1 grid-cols-5 gap-x-5 gap-y-1.5 lg:grid-cols-10">
         {cells.map((cell) => (
           <div key={cell.label} className="flex min-w-0 flex-col">
             <span className="truncate text-[9px] font-medium tracking-wider text-white/40 uppercase">
@@ -105,8 +107,7 @@ export function TripReport({ data, startTimeMs }: Props) {
           </div>
         ))}
 
-        {/* Autopilot spans the width — it carries both time and distance */}
-        <div className="col-span-2 flex min-w-0 flex-col">
+        <div className="flex min-w-0 flex-col">
           <span className="text-[9px] font-medium tracking-wider text-white/40 uppercase">
             {t('trip.apUsage')}
           </span>
@@ -116,10 +117,7 @@ export function TripReport({ data, startTimeMs }: Props) {
               : t('trip.none')}
           </span>
         </div>
-      </div>
-
-      <div className="border-t border-white/5 px-3 py-2">
-        <div className="flex items-baseline justify-between">
+        <div className="flex min-w-0 flex-col">
           <span className="text-[9px] font-medium tracking-wider text-white/40 uppercase">
             {t('trip.score')}
           </span>
@@ -133,15 +131,15 @@ export function TripReport({ data, startTimeMs }: Props) {
               ? t('trip.scoreInsufficient')
               : stats.driveScore}
           </span>
+          {stats.driveScore !== null && (
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/10">
+              <div
+                className={clsx('h-full', scoreBarClass(stats.driveScore))}
+                style={{ width: `${stats.driveScore}%` }}
+              />
+            </div>
+          )}
         </div>
-        {stats.driveScore !== null && (
-          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/10">
-            <div
-              className={clsx('h-full', scoreBarClass(stats.driveScore))}
-              style={{ width: `${stats.driveScore}%` }}
-            />
-          </div>
-        )}
       </div>
     </div>
   );

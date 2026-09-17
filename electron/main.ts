@@ -16,6 +16,12 @@ import type {
   ComposeExportRequest,
   ComposeExportResult,
 } from './composeTypes.js';
+import {
+  cancelVisionScan,
+  getVisionThumbnail,
+  runVisionScan,
+} from './visionScan.js';
+import type { VisionScanRequest, VisionScanResult } from './visionTypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -211,6 +217,81 @@ function getFFmpegPath(): string {
     return ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
   }
   return ffmpegStatic;
+}
+
+function getVisionModelPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'models', 'yolox_tiny.onnx')
+    : path.join(__dirname, '../build/models/yolox_tiny.onnx');
+}
+
+const TESLA_DRIVE_NAME = 'TESLADRIVE';
+
+/** Locate the user's fixed-name Tesla USB volume without scanning its files. */
+function findTeslaCamDirectory(): string | null {
+  const candidates: string[] = [];
+  if (process.platform === 'darwin') {
+    candidates.push(path.join('/Volumes', TESLA_DRIVE_NAME, 'TeslaCam'));
+  } else if (process.platform === 'win32') {
+    for (let code = 'D'.charCodeAt(0); code <= 'Z'.charCodeAt(0); code++) {
+      candidates.push(`${String.fromCharCode(code)}:\\TeslaCam`);
+    }
+  } else {
+    for (const base of ['/media', '/run/media', '/mnt']) {
+      candidates.push(path.join(base, TESLA_DRIVE_NAME, 'TeslaCam'));
+      try {
+        for (const userDir of fs.readdirSync(base)) {
+          candidates.push(
+            path.join(base, userDir, TESLA_DRIVE_NAME, 'TeslaCam'),
+          );
+        }
+      } catch {
+        /* mount base absent */
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    try {
+      if (fs.statSync(candidate).isDirectory()) return candidate;
+    } catch {
+      /* try next mount location */
+    }
+  }
+  return null;
+}
+
+/**
+ * Populate the renderer's directory input through Chromium's file-input API.
+ * This preserves native File objects (streaming slices, media playback, and
+ * webkitRelativePath), avoiding copies of multi-gigabyte dashcam files.
+ */
+async function setDirectoryInput(
+  webContents: Electron.WebContents,
+  directory: string,
+): Promise<void> {
+  const devtools = webContents.debugger;
+  let attachedHere = false;
+  if (!devtools.isAttached()) {
+    devtools.attach('1.3');
+    attachedHere = true;
+  }
+  try {
+    const document = (await devtools.sendCommand('DOM.getDocument', {
+      depth: 1,
+      pierce: true,
+    })) as { root: { nodeId: number } };
+    const query = (await devtools.sendCommand('DOM.querySelector', {
+      nodeId: document.root.nodeId,
+      selector: '#teslacam-directory-input',
+    })) as { nodeId: number };
+    if (!query.nodeId) throw new Error('Directory input not ready');
+    await devtools.sendCommand('DOM.setFileInputFiles', {
+      files: [directory],
+      nodeId: query.nodeId,
+    });
+  } finally {
+    if (attachedHere && devtools.isAttached()) devtools.detach();
+  }
 }
 
 // ── Hardware H.264 encoder detection (probed once, cached) ──
@@ -441,6 +522,19 @@ app.on('ready', () => {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
 
+  // ── Fixed-name Tesla USB auto-load ──
+  ipcMain.handle('auto-load-tesla-drive', async (event) => {
+    const directory = findTeslaCamDirectory();
+    if (!directory) return { ok: false, found: false };
+    try {
+      await setDirectoryInput(event.sender, directory);
+      return { ok: true, found: true, directory };
+    } catch (error) {
+      console.warn('[AutoLoad] Could not populate directory input:', error);
+      return { ok: false, found: true, directory, error: errMsg(error) };
+    }
+  });
+
   // ── File Save ──
   ipcMain.handle(
     'save-file',
@@ -634,6 +728,55 @@ app.on('ready', () => {
       return { ok: false, error: errMsg(e) };
     }
   });
+
+  // ── Left-wheel visual candidate scan ──
+  // FFmpeg decodes tiny grayscale frames in the main process while the
+  // renderer remains responsive. Results are candidate moments for human
+  // review, not claims that contact definitely occurred.
+  ipcMain.handle(
+    'vision-scan-start',
+    async (event, request: VisionScanRequest): Promise<VisionScanResult> => {
+      try {
+        const result = await runVisionScan(
+          getFFmpegPath(),
+          getVisionModelPath(),
+          path.join(app.getPath('userData'), 'vision-cache'),
+          request,
+          (progress) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send('vision-scan-progress', progress);
+            }
+          },
+        );
+        return { ok: true, ...result };
+      } catch (error) {
+        const canceled =
+          typeof error === 'object' &&
+          error !== null &&
+          'canceled' in error &&
+          Boolean((error as { canceled?: unknown }).canceled);
+        return { ok: false, canceled, error: errMsg(error) };
+      }
+    },
+  );
+
+  ipcMain.on('vision-scan-cancel', (_event, { sessionId }) => {
+    if (typeof sessionId === 'string') cancelVisionScan(sessionId);
+  });
+
+  ipcMain.handle(
+    'vision-thumbnail',
+    async (
+      _event,
+      { filePath, seconds }: { filePath: string; seconds: number },
+    ) =>
+      getVisionThumbnail(
+        getFFmpegPath(),
+        path.join(app.getPath('userData'), 'vision-cache'),
+        filePath,
+        seconds,
+      ),
+  );
 
   // ── Fast compose export (source files → filter_complex → H.264) ──
 

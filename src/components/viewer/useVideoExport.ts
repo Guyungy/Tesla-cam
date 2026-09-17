@@ -360,314 +360,322 @@ export function useVideoExport({
   );
 
   // ── Export entry point ──
-  const exportCurrentView = useCallback(async () => {
-    if (exporting) return;
-    if (exportableSeconds <= 0) {
-      setToastMsg(t('toast.noContent'));
-      return;
-    }
+  const exportCurrentView = useCallback(
+    async (range?: { startSeconds: number; durationSeconds: number }) => {
+      if (exporting) return;
+      const activeExportSeconds = range?.durationSeconds ?? exportableSeconds;
+      if (activeExportSeconds <= 0) {
+        setToastMsg(t('toast.noContent'));
+        return;
+      }
 
-    const exportStartSeconds =
-      exportSelectionSeconds > 0 && exportIn !== undefined
-        ? exportIn
-        : clipPlayedSeconds;
+      const exportStartSeconds = range
+        ? range.startSeconds
+        : exportSelectionSeconds > 0 && exportIn !== undefined
+          ? exportIn
+          : clipPlayedSeconds;
 
-    const sessionId = `export-${Date.now()}`;
-    activeExportSessionRef.current = sessionId;
-    const prevPlaybackRate = playbackRate;
-    const fileName = `${clip.name}-${viewType}.mp4`;
+      const sessionId = `export-${Date.now()}`;
+      activeExportSessionRef.current = sessionId;
+      const prevPlaybackRate = playbackRate;
+      const fileName = `${clip.name}-${viewType}.mp4`;
 
-    // ── Fast path: FFmpeg filter_complex from source files ──
-    if (window.electronAPI?.exportCompose && canUseComposeExport) {
-      setPlaying(false);
-      setPlaybackRate(1);
-      setExporting(true);
-      setExportProgress(0);
-      setExportFrameCount(0);
-      setExportEta(undefined);
-      setExportEncoding(true);
-      isCancelingRef.current = false;
+      // ── Fast path: FFmpeg filter_complex from source files ──
+      if (window.electronAPI?.exportCompose && canUseComposeExport) {
+        setPlaying(false);
+        setPlaybackRate(1);
+        setExporting(true);
+        setExportProgress(0);
+        setExportFrameCount(0);
+        setExportEta(undefined);
+        setExportEncoding(true);
+        isCancelingRef.current = false;
 
-      const startMark = performance.now();
-      const unsub = window.electronAPI.onExportComposeProgress?.((data) => {
-        if (data.sessionId !== sessionId) return;
-        setExportProgress(data.progress);
-        setExportFrameCount(Math.round(data.outTimeSec * 30));
-        if (data.progress > 2 && data.outTimeSec > 0.5) {
-          const rate =
-            data.outTimeSec / ((performance.now() - startMark) / 1000);
-          if (rate > 0.01) {
-            const etaSec = (exportableSeconds - data.outTimeSec) / rate;
-            if (etaSec > 60) {
-              setExportEta(
-                `${Math.floor(etaSec / 60)}m ${Math.round(etaSec % 60)}s`,
-              );
-            } else {
-              setExportEta(`${Math.round(Math.max(0, etaSec))}s`);
+        const startMark = performance.now();
+        const unsub = window.electronAPI.onExportComposeProgress?.((data) => {
+          if (data.sessionId !== sessionId) return;
+          setExportProgress(data.progress);
+          setExportFrameCount(Math.round(data.outTimeSec * 30));
+          if (data.progress > 2 && data.outTimeSec > 0.5) {
+            const rate =
+              data.outTimeSec / ((performance.now() - startMark) / 1000);
+            if (rate > 0.01) {
+              const etaSec = (activeExportSeconds - data.outTimeSec) / rate;
+              if (etaSec > 60) {
+                setExportEta(
+                  `${Math.floor(etaSec / 60)}m ${Math.round(etaSec % 60)}s`,
+                );
+              } else {
+                setExportEta(`${Math.round(Math.max(0, etaSec))}s`);
+              }
             }
           }
-        }
-      });
-
-      try {
-        // Export-start wall-clock moment: static label as fallback, unix
-        // epoch for a live-updating drawtext clock in the output video.
-        const exportStartMoment = (() => {
-          const info = calcSeekInfo(footage, exportStartSeconds);
-          if (!info) return null;
-          return dayjs(parseTime(footage.segments[info.index].name)).add(
-            info.seconds,
-            'second',
-          );
-        })();
-
-        const result = await window.electronAPI.exportCompose({
-          sessionId,
-          fileName,
-          viewType,
-          startSeconds: exportStartSeconds,
-          durationSeconds: exportableSeconds,
-          segments: buildComposeSegments(exportStartSeconds, exportableSeconds),
-          labels: camLabels,
-          layout: buildComposeLayout(),
-          overlay: {
-            showTime: exportSettings.showTime,
-            showLocation: exportSettings.showLocation,
-            showDriveData: exportSettings.showDriveData,
-            locationText,
-            baseTimestampLabel:
-              exportStartMoment?.format(timestampFmt) ?? formatTime,
-            baseTimestampEpoch: exportStartMoment?.unix(),
-            brandText: 'TESLA CINEMA',
-            timeWindows: exportSettings.showTime
-              ? buildTimeWindows(exportStartSeconds, exportableSeconds)
-              : undefined,
-            driveWindows: exportSettings.showDriveData
-              ? buildDriveWindows(exportStartSeconds, exportableSeconds)
-              : undefined,
-          },
-          // Omitted on purpose: the main process reads the real source rate
-          // (~36 fps on current firmware, ~24 on older clips) instead of
-          // resampling everything to a fixed 30.
-          useHardware: exportSettings.hwAccel,
         });
 
-        unsub?.();
-        activeExportSessionRef.current = null;
-        setExporting(false);
-        setExportProgress(0);
-        setExportEncoding(false);
-        setPlaybackRate(prevPlaybackRate);
+        try {
+          // Export-start wall-clock moment: static label as fallback, unix
+          // epoch for a live-updating drawtext clock in the output video.
+          const exportStartMoment = (() => {
+            const info = calcSeekInfo(footage, exportStartSeconds);
+            if (!info) return null;
+            return dayjs(parseTime(footage.segments[info.index].name)).add(
+              info.seconds,
+              'second',
+            );
+          })();
 
-        if (isCancelingRef.current || result.canceled) {
-          return;
-        }
-        if (result.ok && result.filePath) {
-          setToastMsg(t('toast.videoSaved'));
-          window.electronAPI.showItemInFolder(result.filePath);
-        } else {
-          console.error('Compose export failed:', result.error);
-          setToastMsg(
-            t('toast.exportFailedStart', {
-              error: result.error || 'unknown',
-            }),
-          );
-        }
-      } catch (e) {
-        unsub?.();
-        activeExportSessionRef.current = null;
-        setExporting(false);
-        setExportEncoding(false);
-        setPlaybackRate(prevPlaybackRate);
-        setToastMsg(t('toast.exportError', { error: errText(e) }));
-      }
-      return;
-    }
+          const result = await window.electronAPI.exportCompose({
+            sessionId,
+            fileName,
+            viewType,
+            startSeconds: exportStartSeconds,
+            durationSeconds: activeExportSeconds,
+            segments: buildComposeSegments(
+              exportStartSeconds,
+              activeExportSeconds,
+            ),
+            labels: camLabels,
+            layout: buildComposeLayout(),
+            overlay: {
+              showTime: exportSettings.showTime,
+              showLocation: exportSettings.showLocation,
+              showDriveData: exportSettings.showDriveData,
+              locationText,
+              baseTimestampLabel:
+                exportStartMoment?.format(timestampFmt) ?? formatTime,
+              baseTimestampEpoch: exportStartMoment?.unix(),
+              brandText: 'TESLA CINEMA',
+              timeWindows: exportSettings.showTime
+                ? buildTimeWindows(exportStartSeconds, activeExportSeconds)
+                : undefined,
+              driveWindows: exportSettings.showDriveData
+                ? buildDriveWindows(exportStartSeconds, activeExportSeconds)
+                : undefined,
+            },
+            // Omitted on purpose: the main process reads the real source rate
+            // (~36 fps on current firmware, ~24 on older clips) instead of
+            // resampling everything to a fixed 30.
+            useHardware: exportSettings.hwAccel,
+          });
 
-    // ── Legacy path: canvas RGBA pipe ──
-    if (!window.electronAPI?.exportStart) {
-      setToastMsg(t('toast.exportFailed'));
-      return;
-    }
+          unsub?.();
+          activeExportSessionRef.current = null;
+          setExporting(false);
+          setExportProgress(0);
+          setExportEncoding(false);
+          setPlaybackRate(prevPlaybackRate);
 
-    try {
-      setPlaying(false);
-      setPlaybackRate(1);
-      await waitForLayoutCommit();
-      const initialSeekInfo = await seekExportFrame(exportStartSeconds);
-
-      const { width, height, videoHeight } = resolveCanvasSize();
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Failed to create canvas context');
-
-      const exportTime = dayjs(
-        parseTime(footage.segments[initialSeekInfo.index].name),
-      )
-        .add(initialSeekInfo.seconds, 'second')
-        .format(timestampFmt);
-      setOverlayTimeLocation(exportTime, locationText);
-
-      const fps = 30;
-
-      const startResult = await window.electronAPI.exportStart({
-        sessionId,
-        fileName,
-        width,
-        height,
-        fps,
-      });
-      if (!startResult.ok) {
-        setPlaybackRate(prevPlaybackRate);
-        if (!startResult.canceled) {
-          setToastMsg(
-            t('toast.exportFailedStart', {
-              error: startResult.error || 'unknown',
-            }),
-          );
+          if (isCancelingRef.current || result.canceled) {
+            return;
+          }
+          if (result.ok && result.filePath) {
+            setToastMsg(t('toast.videoSaved'));
+            window.electronAPI.showItemInFolder(result.filePath);
+          } else {
+            console.error('Compose export failed:', result.error);
+            setToastMsg(
+              t('toast.exportFailedStart', {
+                error: result.error || 'unknown',
+              }),
+            );
+          }
+        } catch (e) {
+          unsub?.();
+          activeExportSessionRef.current = null;
+          setExporting(false);
+          setExportEncoding(false);
+          setPlaybackRate(prevPlaybackRate);
+          setToastMsg(t('toast.exportError', { error: errText(e) }));
         }
         return;
       }
 
-      setExporting(true);
-      setExportProgress(0);
-      setExportFrameCount(0);
-      setExportEta(undefined);
-      setExportEncoding(false);
-      isCancelingRef.current = false;
+      // ── Legacy path: canvas RGBA pipe ──
+      if (!window.electronAPI?.exportStart) {
+        setToastMsg(t('toast.exportFailed'));
+        return;
+      }
 
-      const frameDuration = 1 / fps;
-      const totalFrames = Math.ceil(exportableSeconds * fps);
+      try {
+        setPlaying(false);
+        setPlaybackRate(1);
+        await waitForLayoutCommit();
+        const initialSeekInfo = await seekExportFrame(exportStartSeconds);
 
-      const startRealTime = performance.now();
-      let frameIndex = 0;
-      let lastUiUpdate = 0;
+        const { width, height, videoHeight } = resolveCanvasSize();
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Failed to create canvas context');
 
-      const captureLoop = async () => {
-        while (frameIndex < totalFrames) {
-          if (isCancelingRef.current) {
-            window.electronAPI!.exportCancel(sessionId);
-            setExporting(false);
-            setExportProgress(0);
-            setPlaying(false);
-            setPlaybackRate(prevPlaybackRate);
-            return;
+        const exportTime = dayjs(
+          parseTime(footage.segments[initialSeekInfo.index].name),
+        )
+          .add(initialSeekInfo.seconds, 'second')
+          .format(timestampFmt);
+        setOverlayTimeLocation(exportTime, locationText);
+
+        const fps = 30;
+
+        const startResult = await window.electronAPI.exportStart({
+          sessionId,
+          fileName,
+          width,
+          height,
+          fps,
+        });
+        if (!startResult.ok) {
+          setPlaybackRate(prevPlaybackRate);
+          if (!startResult.canceled) {
+            setToastMsg(
+              t('toast.exportFailedStart', {
+                error: startResult.error || 'unknown',
+              }),
+            );
           }
-
-          const realElapsed = (performance.now() - startRealTime) / 1000;
-          const now = performance.now();
-          if (
-            frameIndex === 0 ||
-            frameIndex === totalFrames - 1 ||
-            now - lastUiUpdate >= 120
-          ) {
-            const pct = Math.min(99, (frameIndex / totalFrames) * 100);
-            setExportProgress(pct);
-            setExportFrameCount(frameIndex);
-
-            if (frameIndex > 5 && realElapsed > 0) {
-              const framesPerSec = frameIndex / realElapsed;
-              const remaining = (totalFrames - frameIndex) / framesPerSec;
-              if (remaining > 60) {
-                setExportEta(
-                  `${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`,
-                );
-              } else {
-                setExportEta(`${Math.round(remaining)}s`);
-              }
-            }
-            lastUiUpdate = now;
-          }
-
-          const virtualElapsed = frameIndex * frameDuration;
-          const targetClipSeconds = Math.min(
-            exportStartSeconds + virtualElapsed,
-            footage.duration,
-          );
-          const frameSeekInfo = await seekExportFrame(targetClipSeconds);
-          const overlayTime = dayjs(
-            parseTime(footage.segments[frameSeekInfo.index].name),
-          )
-            .add(frameSeekInfo.seconds, 'second')
-            .format(timestampFmt);
-          setOverlayTimeLocation(overlayTime, locationText);
-
-          drawFrame(ctx, width, height, viewType, videoHeight);
-          const frameBytes = canvasToRgbaBytes(ctx, width, height);
-          await window.electronAPI!.exportFrame(sessionId, frameBytes);
-
-          frameIndex++;
-
-          if (frameIndex % 6 === 0) {
-            await new Promise((r) => requestAnimationFrame(r));
-          }
+          return;
         }
 
-        setExportProgress(100);
-        setExportEta(undefined);
-        setExportEncoding(true);
-        const result = await window.electronAPI!.exportFinish(sessionId);
-
-        setPlaying(false);
-        setPlaybackRate(prevPlaybackRate);
-        setExporting(false);
+        setExporting(true);
         setExportProgress(0);
+        setExportFrameCount(0);
+        setExportEta(undefined);
+        setExportEncoding(false);
+        isCancelingRef.current = false;
 
-        if (result.ok && result.filePath) {
-          setToastMsg(t('toast.videoSaved'));
-          window.electronAPI!.showItemInFolder(result.filePath);
-        } else {
-          setToastMsg(t('toast.exportFailedEmpty'));
-          console.error('FFmpeg export failed:', result.error);
-        }
-      };
+        const frameDuration = 1 / fps;
+        const totalFrames = Math.ceil(activeExportSeconds * fps);
 
-      captureLoop().catch((err: unknown) => {
-        console.error('Export loop failed:', err);
-        window.electronAPI?.exportCancel(sessionId);
+        const startRealTime = performance.now();
+        let frameIndex = 0;
+        let lastUiUpdate = 0;
+
+        const captureLoop = async () => {
+          while (frameIndex < totalFrames) {
+            if (isCancelingRef.current) {
+              window.electronAPI!.exportCancel(sessionId);
+              setExporting(false);
+              setExportProgress(0);
+              setPlaying(false);
+              setPlaybackRate(prevPlaybackRate);
+              return;
+            }
+
+            const realElapsed = (performance.now() - startRealTime) / 1000;
+            const now = performance.now();
+            if (
+              frameIndex === 0 ||
+              frameIndex === totalFrames - 1 ||
+              now - lastUiUpdate >= 120
+            ) {
+              const pct = Math.min(99, (frameIndex / totalFrames) * 100);
+              setExportProgress(pct);
+              setExportFrameCount(frameIndex);
+
+              if (frameIndex > 5 && realElapsed > 0) {
+                const framesPerSec = frameIndex / realElapsed;
+                const remaining = (totalFrames - frameIndex) / framesPerSec;
+                if (remaining > 60) {
+                  setExportEta(
+                    `${Math.floor(remaining / 60)}m ${Math.round(remaining % 60)}s`,
+                  );
+                } else {
+                  setExportEta(`${Math.round(remaining)}s`);
+                }
+              }
+              lastUiUpdate = now;
+            }
+
+            const virtualElapsed = frameIndex * frameDuration;
+            const targetClipSeconds = Math.min(
+              exportStartSeconds + virtualElapsed,
+              footage.duration,
+            );
+            const frameSeekInfo = await seekExportFrame(targetClipSeconds);
+            const overlayTime = dayjs(
+              parseTime(footage.segments[frameSeekInfo.index].name),
+            )
+              .add(frameSeekInfo.seconds, 'second')
+              .format(timestampFmt);
+            setOverlayTimeLocation(overlayTime, locationText);
+
+            drawFrame(ctx, width, height, viewType, videoHeight);
+            const frameBytes = canvasToRgbaBytes(ctx, width, height);
+            await window.electronAPI!.exportFrame(sessionId, frameBytes);
+
+            frameIndex++;
+
+            if (frameIndex % 6 === 0) {
+              await new Promise((r) => requestAnimationFrame(r));
+            }
+          }
+
+          setExportProgress(100);
+          setExportEta(undefined);
+          setExportEncoding(true);
+          const result = await window.electronAPI!.exportFinish(sessionId);
+
+          setPlaying(false);
+          setPlaybackRate(prevPlaybackRate);
+          setExporting(false);
+          setExportProgress(0);
+
+          if (result.ok && result.filePath) {
+            setToastMsg(t('toast.videoSaved'));
+            window.electronAPI!.showItemInFolder(result.filePath);
+          } else {
+            setToastMsg(t('toast.exportFailedEmpty'));
+            console.error('FFmpeg export failed:', result.error);
+          }
+        };
+
+        captureLoop().catch((err: unknown) => {
+          console.error('Export loop failed:', err);
+          window.electronAPI?.exportCancel(sessionId);
+          setExporting(false);
+          setPlaying(false);
+          setPlaybackRate(prevPlaybackRate);
+          setToastMsg(t('toast.exportError', { error: errText(err) }));
+        });
+      } catch (e) {
+        console.error('Export start failed', e);
         setExporting(false);
-        setPlaying(false);
         setPlaybackRate(prevPlaybackRate);
-        setToastMsg(t('toast.exportError', { error: errText(err) }));
-      });
-    } catch (e) {
-      console.error('Export start failed', e);
-      setExporting(false);
-      setPlaybackRate(prevPlaybackRate);
-      setToastMsg(t('toast.exportFailedStart', { error: errText(e) }));
-    }
-  }, [
-    clip.name,
-    footage,
-    clipPlayedSeconds,
-    exportIn,
-    exportSelectionSeconds,
-    exportableSeconds,
-    exporting,
-    playbackRate,
-    drawFrame,
-    locationText,
-    resolveCanvasSize,
-    viewType,
-    t,
-    timestampFmt,
-    seekExportFrame,
-    waitForLayoutCommit,
-    canUseComposeExport,
-    buildComposeSegments,
-    buildComposeLayout,
-    buildDriveWindows,
-    buildTimeWindows,
-    exportSettings,
-    formatTime,
-    camLabels,
-    setOverlayTimeLocation,
-    setPlaying,
-    setPlaybackRate,
-    setToastMsg,
-  ]);
+        setToastMsg(t('toast.exportFailedStart', { error: errText(e) }));
+      }
+    },
+    [
+      clip.name,
+      footage,
+      clipPlayedSeconds,
+      exportIn,
+      exportSelectionSeconds,
+      exportableSeconds,
+      exporting,
+      playbackRate,
+      drawFrame,
+      locationText,
+      resolveCanvasSize,
+      viewType,
+      t,
+      timestampFmt,
+      seekExportFrame,
+      waitForLayoutCommit,
+      canUseComposeExport,
+      buildComposeSegments,
+      buildComposeLayout,
+      buildDriveWindows,
+      buildTimeWindows,
+      exportSettings,
+      formatTime,
+      camLabels,
+      setOverlayTimeLocation,
+      setPlaying,
+      setPlaybackRate,
+      setToastMsg,
+    ],
+  );
 
   return {
     exporting,

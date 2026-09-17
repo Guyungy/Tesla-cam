@@ -7,6 +7,7 @@ import { TitleBar } from '../components/TitleBar';
 import { Toast } from '../components/Toast';
 import { TslMark } from '../components/TslMark';
 import { useAppSettings } from '../components/useAppSettings';
+import { WheelScan } from '../components/WheelScan';
 import { useI18n } from '../i18n';
 import {
   type CamClip,
@@ -35,6 +36,11 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
     total: number;
   }>();
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [reviewSeek, setReviewSeek] = useState<{
+    clipName: string;
+    seconds: number;
+    nonce: number;
+  }>();
 
   const waitForUiRelease = () =>
     new Promise<void>((resolve) => {
@@ -53,6 +59,11 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
     });
     setLoadProgress(undefined);
     setFootage(res);
+  };
+
+  const reviewWheelCandidate = async (item: CamClip, seconds: number) => {
+    setReviewSeek({ clipName: item.name, seconds, nonce: Date.now() });
+    if (item !== clip) await loadClip(item);
   };
 
   // Keep latest values in refs so global handlers stay stable
@@ -175,15 +186,21 @@ export function Home({ items, lastFolder, onOpenFolder, onDeleteClip }: Props) {
 
         <div className="from-surface-base relative flex flex-1 flex-col overflow-hidden bg-gradient-to-br to-[#111]">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-gradient-to-b from-black/50 to-transparent" />
+          <WheelScan items={items} onReview={reviewWheelCandidate} />
 
           {clip ? (
             footage ? (
               <div className="flex h-full min-h-0 w-full flex-col">
                 <div className="animate-fade-in flex min-h-0 flex-1 flex-col justify-center p-4 delay-100">
                   <Viewer
-                    key={clip.name}
+                    key={`${clip.name}:${reviewSeek?.clipName === clip.name ? reviewSeek.nonce : 0}`}
                     clip={clip}
                     footage={footage}
+                    initialSeekSeconds={
+                      reviewSeek?.clipName === clip.name
+                        ? reviewSeek.seconds
+                        : undefined
+                    }
                     onFootageUpdate={setFootage}
                     onDelete={handleDeleteClip}
                     onClipEnded={handleClipEnded}
