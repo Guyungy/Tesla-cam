@@ -26,6 +26,7 @@ declare global {
       trashFiles: (
         paths: string[],
         clipName: string,
+        locale?: string,
       ) => Promise<{
         ok: boolean;
         canceled?: boolean;
@@ -33,8 +34,10 @@ declare global {
         trashedCount?: number;
         /** Files that could not be removed (partial delete). */
         failedCount?: number;
-        /** True when the drive has no Recycle Bin and files were erased. */
+        /** Compatibility field; safe recycling always returns false. */
         permanent?: boolean;
+        removedPaths?: string[];
+        failedPaths?: string[];
       }>;
       autoLoadTeslaDrive: () => Promise<{
         ok: boolean;

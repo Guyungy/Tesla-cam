@@ -76,6 +76,14 @@ export const locales = {
     'export.frames': '已捕获 {count} 帧',
     'export.eta': '预计剩余 {time}',
     'export.encoding': '正在编码...',
+    'export.range': '导出范围',
+    'export.duration': '时长',
+    'export.view': '画面布局',
+    'export.resolution': '最高宽度',
+    'export.in': '起点',
+    'export.out': '终点',
+    'export.setIn': '将当前播放位置设为起点 (I)',
+    'export.setOut': '将当前播放位置设为终点 (O)',
 
     // Toast messages
     'toast.videoSaved': '视频已保存',
@@ -95,6 +103,8 @@ export const locales = {
     'toast.clipDeletedPermanent': '片段已永久删除（该磁盘无回收站）',
     'toast.clipDeletedPartial': '已删除 {count} 个文件，{failed} 个失败',
     'toast.deleteFailed': '删除失败: {error}',
+    'toast.deleteNoChanges': '没有文件被删除',
+    'toast.loadFailed': '片段加载失败',
 
     // Home
     'home.loading': '加载中',
@@ -271,6 +281,14 @@ export const locales = {
     'export.frames': '{count} frames captured',
     'export.eta': 'ETA: {time}',
     'export.encoding': 'Encoding...',
+    'export.range': 'Export range',
+    'export.duration': 'Duration',
+    'export.view': 'View',
+    'export.resolution': 'Max width',
+    'export.in': 'IN',
+    'export.out': 'OUT',
+    'export.setIn': 'Set the current playhead as IN (I)',
+    'export.setOut': 'Set the current playhead as OUT (O)',
 
     // Toast messages
     'toast.videoSaved': 'Video saved',
@@ -291,6 +309,8 @@ export const locales = {
       'Clip deleted permanently (drive has no Recycle Bin)',
     'toast.clipDeletedPartial': 'Deleted {count} file(s), {failed} failed',
     'toast.deleteFailed': 'Delete failed: {error}',
+    'toast.deleteNoChanges': 'No files were deleted',
+    'toast.loadFailed': 'Failed to load clip',
 
     // Home
     'home.loading': 'Loading Footage',

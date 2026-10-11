@@ -59,6 +59,10 @@ export function App() {
   });
   const inputEl = useRef<HTMLInputElement>(null);
   const autoLoadAttemptedRef = useRef(false);
+  const busyRef = useRef(false);
+  const handleBusyChange = useCallback((busy: boolean) => {
+    busyRef.current = busy;
+  }, []);
 
   useEffect(() => {
     if (inputEl.current) {
@@ -69,6 +73,7 @@ export function App() {
 
   const loadClips = useCallback(
     async (files: FileList | File[], folderName?: string) => {
+      if (busyRef.current) return;
       if (
         !files ||
         (Array.isArray(files) ? files.length === 0 : files.length === 0)
@@ -134,6 +139,7 @@ export function App() {
       e.preventDefault();
       dragCountRef.current = 0;
       setDragging(false);
+      if (busyRef.current) return;
 
       const items = e.dataTransfer?.items;
       if (!items || items.length === 0) return;
@@ -179,10 +185,13 @@ export function App() {
       <Home
         items={clips}
         lastFolder={lastFolder}
-        onOpenFolder={() => inputEl.current?.click()}
-        onDeleteClip={(clip) => {
-          setClips((current) => current.filter((item) => item !== clip));
+        onOpenFolder={() => { if (!busyRef.current) inputEl.current?.click(); }}
+        onDeleteClip={(clip, replacement) => {
+          setClips((current) => current.flatMap((item) =>
+            item === clip ? (replacement ? [replacement] : []) : [item],
+          ));
         }}
+        onBusyChange={handleBusyChange}
       />
 
       {/* Hidden File Input */}

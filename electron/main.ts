@@ -9,7 +9,9 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import { createRequire } from 'module';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
+
+import { pathKey, recycleManifest, snapshotSource, validateTrashManifest, type SourceSnapshot } from './safeTrash.js';
 
 import { prepareComposeExport } from './composeExport.js';
 import type {
@@ -75,31 +77,20 @@ function validateComposeRequest(req: ComposeExportRequest): string | null {
   return null;
 }
 
-/**
- * Whether the Recycle Bin actually works at a given location.
- *
- * Removable / exFAT volumes — i.e. every real TeslaCam USB drive — have no
- * Recycle Bin, and `shell.trashItem` fails for every single file there. The
- * only way to know is to try it, so probe once with a throwaway file in the
- * same directory and let the confirmation dialog say what will really happen.
- */
-async function recycleBinWorksFor(samplePath: string): Promise<boolean> {
-  const probe = path.join(
-    path.dirname(samplePath),
-    `.teslacam-trash-probe-${process.pid}-${Date.now()}`,
-  );
+// Exact selected-file capabilities, scoped to the trusted main frame/window.
+const authorizedSources = new Map<number, Map<string, SourceSnapshot>>();
+const deletingWindows = new Set<number>();
+function trustedSourceEvent(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
+  if (event.senderFrame !== event.sender.mainFrame) return false;
+  const expected = !app.isPackaged && process.env['ELECTRON_RENDERER_URL']
+    ? process.env['ELECTRON_RENDERER_URL']
+    : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
   try {
-    await fsPromises.writeFile(probe, '');
-  } catch {
-    return false; // not writable — trashing cannot work either
-  }
-  try {
-    await shell.trashItem(probe);
-    return true;
-  } catch {
-    await fsPromises.rm(probe, { force: true }).catch(() => {});
-    return false;
-  }
+    const actual = new URL(event.senderFrame.url);
+    const target = new URL(expected as string);
+    return actual.protocol === target.protocol && actual.host === target.host &&
+      actual.pathname === target.pathname;
+  } catch { return false; }
 }
 
 type ExportSession = {
@@ -576,85 +567,52 @@ app.on('ready', () => {
     shell.showItemInFolder(filePath);
   });
 
-  ipcMain.handle(
-    'trash-files',
-    async (
-      event,
-      { paths, clipName }: { paths: string[]; clipName: string },
-    ) => {
-      const win = BrowserWindow.fromWebContents(event.sender);
-      if (!win) return { ok: false, error: 'No window' };
-
-      const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
-      if (uniquePaths.length === 0) {
-        return { ok: false, error: 'No files to delete' };
+  ipcMain.on('authorize-source-file', (event, payload) => {
+    if (!trustedSourceEvent(event)) return;
+    try {
+      const snapshot = snapshotSource(payload?.path);
+      // File's size/mtime came from webUtils in isolated preload, not a raw path API.
+      if (snapshot.size !== payload.size || Math.abs(snapshot.mtimeMs - payload.lastModified) >= 1) return;
+      let registry = authorizedSources.get(event.sender.id);
+      if (!registry) {
+        registry = new Map();
+        const id = event.sender.id;
+        authorizedSources.set(id, registry);
+        event.sender.once('destroyed', () => { authorizedSources.delete(id); deletingWindows.delete(id); });
       }
+      registry.set(pathKey(snapshot.path), snapshot);
+    } catch { /* Invalid or stale files stay read-only. */ }
+  });
 
-      const recycleBin = await recycleBinWorksFor(uniquePaths[0]);
-      const count = uniquePaths.length;
-
-      // One dialog that states the real outcome. Asking "move to Recycle Bin?"
-      // and only then revealing that permanent deletion is the sole option
-      // turns the unrecoverable path into a default on removable drives.
+  ipcMain.handle('trash-files', async (event, payload) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const id = event.sender.id;
+    if (!win || !trustedSourceEvent(event)) return { ok: false, error: 'Untrusted source' };
+    if (deletingWindows.has(id) || exportSessions.size || composeSessions.size) return { ok: false, error: 'Another operation is active' };
+    deletingWindows.add(id);
+    const zh = payload?.locale === 'zh-CN';
+    try {
+      if (typeof payload?.clipName !== 'string' || payload.clipName.length > 256) throw new Error('Invalid clip name');
+      const registry = authorizedSources.get(id) ?? new Map<string, SourceSnapshot>();
+      const files = validateTrashManifest(payload.paths, registry);
       const { response } = await dialog.showMessageBox(win, {
-        type: 'warning',
-        buttons: [
-          recycleBin ? 'Move to Recycle Bin' : 'Delete Permanently',
-          'Cancel',
-        ],
-        defaultId: 1,
-        cancelId: 1,
-        noLink: true,
-        title: 'Delete clip?',
-        message: recycleBin
-          ? `Move "${clipName}" to the Recycle Bin?`
-          : `Permanently delete "${clipName}"?`,
-        detail: recycleBin
-          ? `${count} file(s) will be moved to the Recycle Bin, and can be restored from there.`
-          : `This drive has no Recycle Bin, so all ${count} file(s) will be erased immediately.\n\n` +
-            'This cannot be undone.',
+        type: 'warning', defaultId: 1, cancelId: 1, noLink: true,
+        buttons: zh ? ['移到回收站', '取消'] : ['Move to Recycle Bin', 'Cancel'],
+        title: zh ? '确认移到回收站' : 'Recycle clip?',
+        message: zh ? `将「${payload.clipName}」的 ${files.length} 个文件移到回收站？` : `Recycle ${files.length} files in "${payload.clipName}"?`,
+        detail: (zh ? '仅处理以下文件。如果磁盘不支持回收站，将停止操作，绝不改为永久删除。\n\n' : 'Only the files below will be processed. Stop on failure; never permanently delete when recycling is unavailable.\n\n') + files.map((f) => f.path).join('\n'),
       });
-
-      if (response !== 0) {
-        return { ok: false, canceled: true };
-      }
-
-      let removed = 0;
-      const errors: string[] = [];
-      for (const filePath of uniquePaths) {
-        try {
-          if (recycleBin) {
-            await fsPromises.access(filePath);
-            await shell.trashItem(filePath);
-          } else {
-            await fsPromises.rm(filePath, { recursive: true, force: true });
-          }
-          removed++;
-        } catch (error) {
-          errors.push(`${path.basename(filePath)}: ${errMsg(error)}`);
-          console.warn(`[Delete] Failed for ${filePath}:`, error);
-        }
-      }
-
-      if (removed === 0) {
-        return {
-          ok: false,
-          error: errors.at(0) || 'No files were deleted',
-          failedCount: errors.length,
-        };
-      }
-
-      // A partial delete still updates the sidebar, but must not be reported
-      // as clean — leftover files would otherwise disappear silently.
-      return {
-        ok: true,
-        trashedCount: removed,
-        failedCount: errors.length,
-        permanent: !recycleBin,
-        error: errors.at(0),
-      };
-    },
-  );
+      if (response !== 0 || event.sender.isDestroyed()) return { ok: false, canceled: true };
+      const result = await recycleManifest(files, (p) => shell.trashItem(p));
+      for (const p of result.removedPaths) registry.delete(pathKey(p));
+      if (result.failedCount) result.error = zh
+        ? '部分或全部文件无法移到回收站（可能为磁盘不支持、文件已变化或被占用）。剩余文件已保留，未执行永久删除。'
+        : 'Recycling failed or the source changed. Remaining files are preserved; no permanent deletion was attempted.';
+      return result;
+    } catch (e) {
+      return { ok: false, error: zh ? `未删除任何文件，请重新导入后再试：${errMsg(e)}` : errMsg(e) };
+    } finally { deletingWindows.delete(id); }
+  });
 
   // ── SEI telemetry cache ──
   // The renderer owns the extraction; this side only persists it, so the

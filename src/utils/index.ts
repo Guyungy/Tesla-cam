@@ -1,5 +1,6 @@
 export * from './calcEventSeconds';
 export * from './calcSeekInfo';
+export * from './clipIdentity';
 export * from './correctNum';
 export * from './deleteResultToast';
 export * from './detectCodec';

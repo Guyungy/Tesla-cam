@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 
+import { isCameraVideo } from './clipIdentity';
 import { parseTime } from './parseTime';
 import {
   probeDurationFromUrl,
@@ -39,12 +40,15 @@ async function mapPool<T, R>(
       }
     },
   );
-  await Promise.all(runners);
+  const settled = await Promise.allSettled(runners);
+  const failed = settled.find((result) => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
   return results;
 }
 
 function resolveCamName(fileName: string): CamName | undefined {
-  const restName = fileName.slice(20);
+  if (!isCameraVideo(fileName)) return undefined;
+  const restName = fileName.slice(20).toLowerCase();
   if (restName.startsWith('front')) return 'front';
   if (restName.startsWith('back')) return 'back';
   if (restName.startsWith('left_repeater')) return 'left';
@@ -63,6 +67,7 @@ export async function genFootage(
   onProgress?: (current: number, total: number) => void,
 ): Promise<CamFootage> {
   const urls: string[] = [];
+  try {
   const map: Record<string, CamSegment> = {};
 
   // Create object URLs synchronously (cheap); probe durations in parallel.
@@ -119,6 +124,10 @@ export async function genFootage(
   });
 
   return { segments, duration, urls };
+  } catch (error) {
+    urls.forEach((url) => URL.revokeObjectURL(url));
+    throw error;
+  }
 }
 
 /** Extract one segment's SEI on a dedicated worker (off the main thread). */

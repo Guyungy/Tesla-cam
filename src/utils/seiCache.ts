@@ -1,3 +1,4 @@
+import { clipIdentity } from './clipIdentity';
 import { createLruMap } from './lruMap';
 import type { CamClip, SEIDataPoint } from './types';
 
@@ -42,12 +43,12 @@ const NUMERIC_FIELDS = [
  * drive changes the key; re-opening the same untouched clip does not.
  */
 export function footageCacheKey(
-  clip: Pick<CamClip, 'name' | 'videos'>,
+  clip: Pick<CamClip, 'id' | 'name' | 'videos'>,
 ): string {
   const parts = clip.videos
     .map((video) => `${video.name}:${video.size}:${video.lastModified}`)
     .sort();
-  return `${clip.name}|${parts.join(',')}`;
+  return `v2|${clipIdentity(clip)}|${parts.join(',')}`;
 }
 
 /**

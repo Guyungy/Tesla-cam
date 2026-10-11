@@ -10,6 +10,20 @@ import type {
   VisionScanResult,
 } from './visionTypes.js';
 
+// Only disk-backed File objects can grant a deletion capability.
+const selectedFiles = new Map<string, string>();
+function getSelectedPath(file: File): string {
+  const resolved = webUtils.getPathForFile(file);
+  if (resolved) {
+    const version = `${file.size}:${file.lastModified}`;
+    if (selectedFiles.get(resolved) !== version) {
+      selectedFiles.set(resolved, version);
+      ipcRenderer.send('authorize-source-file', { path: resolved, size: file.size, lastModified: file.lastModified });
+    }
+  }
+  return resolved;
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
@@ -20,9 +34,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('save-file', { name, buffer }),
   showItemInFolder: (path: string) =>
     ipcRenderer.invoke('show-item-in-folder', path),
-  getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  trashFiles: (paths: string[], clipName: string) =>
-    ipcRenderer.invoke('trash-files', { paths, clipName }),
+  getPathForFile: getSelectedPath,
+  trashFiles: (paths: string[], clipName: string, locale?: string) => {
+    if (!Array.isArray(paths) || !paths.length || paths.some((p) => !selectedFiles.has(p))) {
+      return Promise.resolve({ ok: false, error: 'Files were not selected in this window' });
+    }
+    return ipcRenderer.invoke('trash-files', { paths, clipName, locale });
+  },
   autoLoadTeslaDrive: () => ipcRenderer.invoke('auto-load-tesla-drive'),
 
   // SEI telemetry cache (renderer extracts, main process persists)
