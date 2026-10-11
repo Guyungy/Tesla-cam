@@ -198,7 +198,7 @@ const FONT_DIRS: Record<string, string[]> = {
 
 /** Filenames (no directory) that imply a face carrying CJK glyphs. */
 const CJK_FONT_FILE_RE =
-  /(PingFang|Hiragino.?Sans|Heiti|Songti|Kaiti|Yuanti|Lantinghei|YaHei|SimSun|SimHei|Deng|Song|FangSong|NotoSansCJK|NotoSerifCJK|SourceHanSans|SourceHanSerif|WenQuanYi|wqy|uming|ukai|Arial.?Unicode|Malgun|Meiryo|MS.?Gothic)/i;
+  /(PingFang|Hiragino.?Sans|Heiti|Songti|Kaiti|Yuanti|Lantinghei|YaHei|msyh|SimSun|SimHei|Deng|Song|FangSong|NotoSansCJK|NotoSerifCJK|SourceHanSans|SourceHanSerif|WenQuanYi|wqy|uming|ukai|Arial.?Unicode|Malgun|Meiryo|MS.?Gothic)/i;
 
 function firstExisting(paths: string[]): string | undefined {
   for (const p of paths) {

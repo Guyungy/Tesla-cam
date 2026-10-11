@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import dayjs from 'dayjs';
 
 import { useI18n } from '../i18n';
-import { type CamClip, parseTime } from '../utils';
+import { type CamClip, footageCacheKey, parseTime } from '../utils';
 import { ClipType } from './ClipType';
 import { Thumb } from './Thumb';
 
@@ -39,7 +39,7 @@ export function Clip({ item, active, onClick }: Props) {
           videoFile={
             item.videos.find((v) => v.name.includes('-front')) ?? item.videos[0]
           }
-          cacheKey={item.name}
+          cacheKey={footageCacheKey(item)}
         />
       </div>
 

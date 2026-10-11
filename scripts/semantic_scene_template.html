@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TeslaCam 六视角道路态势</title>
+  <style>
+    :root { color-scheme: dark; --ink:#0c1117; --panel:#151c23; --panel-2:#1b252d; --line:#34434d; --text:#f0f3f1; --muted:#a0b2b7; --red:#ed6763; --cyan:#8edce0; --amber:#edbe78; --road:#455864; font:15px/1.5 "Microsoft YaHei UI","Microsoft YaHei",sans-serif; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--ink); color:var(--text); }
+    button,input { font:inherit; }
+    button { cursor:pointer; }
+    a { color:inherit; text-decoration:none; }
+    :focus-visible { outline:2px solid var(--cyan); outline-offset:3px; }
+    .shell { max-width:1680px; margin:auto; padding:20px clamp(16px,2.4vw,36px) 36px; }
+    .top { display:flex; justify-content:space-between; gap:24px; align-items:center; padding:2px 0 17px; border-bottom:1px solid var(--line); }
+    .brand { display:flex; align-items:center; gap:17px; min-width:0; }
+    .brand-mark { display:grid; place-items:center; width:50px; height:50px; flex:none; border:1px solid #8e999d; border-radius:50%; color:var(--red); font:700 32px/1 Bahnschrift,"Arial Narrow",sans-serif; transform:rotate(-16deg); }
+    .eyebrow,.panel-kicker,.meta-label,.mini-index { font:700 11px/1.2 Consolas,"Microsoft YaHei UI",monospace; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
+    h1,h2,p { margin:0; }
+    h1 { margin-top:3px; font:600 clamp(24px,2.7vw,37px)/1.15 Bahnschrift,"Microsoft YaHei UI",sans-serif; letter-spacing:-.025em; }
+    .top p { margin-top:5px; color:var(--muted); font-size:13px; }
+    .header-side { display:flex; gap:24px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+    .source { white-space:nowrap; color:#b7c4c7; font:12px Consolas,"Microsoft YaHei UI",monospace; }
+    .source::before { content:""; display:inline-block; width:7px; height:7px; margin-right:9px; border-radius:50%; background:var(--cyan); box-shadow:0 0 0 4px #8edce01e; }
+    .links { display:flex; gap:8px; }
+    .links a { padding:8px 10px; border:1px solid var(--line); border-radius:6px; color:#d0dcdd; font-size:12px; white-space:nowrap; }
+    .links a:hover { border-color:#93aeb6; background:#ffffff09; }
+    .disclosure { display:flex; align-items:center; gap:10px; min-height:42px; color:#d6cbc0; font-size:12px; border-bottom:1px solid #4b3930; }
+    .disclosure b { color:var(--amber); font-weight:700; }
+    .disclosure .signal { width:3px; height:20px; background:var(--amber); border-radius:4px; flex:none; }
+    .workspace { display:grid; grid-template-columns:minmax(0,1.36fr) minmax(365px,.88fr); gap:10px; margin-top:14px; }
+    .panel { min-width:0; background:var(--panel); border:1px solid var(--line); border-radius:11px; overflow:hidden; }
+    .panel-head { min-height:62px; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:11px 15px; border-bottom:1px solid var(--line); }
+    .panel-head h2 { font:600 19px/1.15 Bahnschrift,"Microsoft YaHei UI",sans-serif; margin-top:4px; }
+    .panel-head small { color:#b6c6c8; font:12px Consolas,"Microsoft YaHei UI",monospace; text-align:right; }
+    .scene-panel { border-top:2px solid var(--red); }
+    .scene-wrap { position:relative; height:min(58vw,584px); min-height:430px; overflow:hidden; background:#1c2932; }
+    #scene { width:100%; height:100%; display:block; touch-action:none; }
+    .scene-compass { position:absolute; top:15px; right:15px; width:70px; height:70px; border:1px solid #dce9e04d; border-radius:50%; display:grid; place-items:center; background:#0b1920b3; pointer-events:none; color:#e0e9e7; font:700 11px Consolas,monospace; }
+    .scene-compass::before { content:""; position:absolute; top:7px; left:calc(50% - 4px); width:8px; height:8px; background:var(--red); clip-path:polygon(50% 0,100% 100%,0 100%); }
+    .scene-compass::after { content:""; position:absolute; inset:9px 50%; width:1px; background:#aec1c266; }
+    .scene-compass span { position:relative; z-index:1; margin-top:7px; }
+    .scene-legend { position:absolute; top:15px; left:15px; padding:10px 11px; background:#0c161ddc; border:1px solid #6e8a9555; border-radius:7px; font-size:11px; line-height:1.85; pointer-events:none; backdrop-filter:blur(6px); }
+    .legend-row { display:flex; gap:8px; align-items:center; white-space:nowrap; }
+    .swatch { width:8px; height:8px; border-radius:2px; }
+    .scene-help { position:absolute; left:15px; bottom:14px; padding:5px 9px; background:#0e1b22c9; border:1px solid #ffffff1f; border-radius:5px; color:#c2d1d3; font-size:11px; pointer-events:none; }
+    .statusline { display:flex; gap:14px; align-items:baseline; padding:11px 15px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+    .statusline strong { color:#f5f7f5; font-size:13px; white-space:nowrap; }
+    .evidence-panel { display:flex; flex-direction:column; border-top:2px solid var(--cyan); }
+    .feed-name { display:flex; align-items:center; gap:7px; font:600 13px Consolas,"Microsoft YaHei UI",monospace; color:var(--cyan); }
+    .feed-name::before { content:""; width:6px; height:6px; background:var(--red); border-radius:50%; }
+    .feed-wrap { position:relative; margin:11px 11px 0; border:1px solid #5f7078; border-radius:6px; overflow:hidden; background:#080f14; line-height:0; }
+    .feed-wrap img { display:block; width:100%; height:auto; }
+    .feed-wrap::after { content:"实拍 / 检测叠加"; position:absolute; right:7px; bottom:7px; padding:4px 6px; background:#091720c4; color:#dce9e6; font:10px Consolas,"Microsoft YaHei UI",monospace; pointer-events:none; }
+    .lane-overlay,.boxes,.mini-boxes { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden; }
+    .detection { position:absolute; border:2px solid var(--cyan); border-radius:2px; box-shadow:0 0 0 1px #0008; }
+    .detection span { position:absolute; left:-2px; top:-31px; padding:3px 5px; border-radius:2px; color:#0b1a1f; font-size:10px; font-weight:700; line-height:1.15; white-space:nowrap; }
+    .feed-note { margin:9px 12px; color:var(--muted); font-size:11px; }
+    .focus-readout { margin:9px 11px 0; padding:8px 10px; min-height:35px; border-left:3px solid var(--red); background:#202e36; color:#e5f1ef; font-size:12px; }
+    .detection.selected { box-shadow:0 0 0 3px #ed676366,0 0 18px #ed676388; z-index:2; }
+    .object-title { padding:9px 12px 6px; border-top:1px solid var(--line); font-size:11px; color:#9fb4ba; letter-spacing:.08em; }
+    .object-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; align-content:start; padding:3px 10px 11px; max-height:170px; overflow:auto; }
+    .object-list button { display:grid; grid-template-columns:9px minmax(0,1fr) auto; gap:7px; align-items:center; min-width:0; padding:7px 8px; border:1px solid #384b55; border-radius:5px; background:#1e2c35; color:#e4e9e7; text-align:left; font-size:11px; }
+    .object-list button:hover,.object-list button.active { border-color:var(--cyan); background:#29404b; }
+    .object-list button span:nth-child(2) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .object-list button small { color:#a6e3df; font:10px Consolas,"Microsoft YaHei UI",monospace; white-space:nowrap; }
+    .object-dot { width:7px; height:7px; border-radius:50%; }
+    .empty { color:var(--muted); font-size:12px; }
+    .control { display:flex; align-items:center; gap:15px; height:58px; margin-top:10px; padding:0 14px; background:#1a252d; border:1px solid var(--line); border-radius:8px; }
+    .control button { min-width:82px; padding:7px 14px; background:var(--text); border:0; border-radius:4px; color:#18222a; font-weight:800; }
+    .control button:hover { background:white; }
+    .control input { flex:1; accent-color:var(--red); }
+    .control span { min-width:86px; text-align:right; font:13px Consolas,"Microsoft YaHei UI",monospace; white-space:nowrap; }
+    .strip { margin-top:11px; padding:0 11px 11px; border:1px solid var(--line); border-radius:9px; background:var(--panel); }
+    .strip-head { display:flex; justify-content:space-between; align-items:center; gap:12px; min-height:52px; }
+    .strip-head h2 { font:600 18px Bahnschrift,"Microsoft YaHei UI",sans-serif; }
+    .strip-head p { color:var(--muted); font-size:11px; }
+    #six-road-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:7px; }
+    .mini-view { position:relative; padding:0; width:100%; border:1px solid #52656e; border-radius:5px; background:#0d151b; color:white; overflow:hidden; aspect-ratio:1.54; }
+    .mini-view img { display:block; width:100%; height:100%; object-fit:cover; }
+    .mini-view.active { border:2px solid var(--red); }
+    .mini-view:hover { filter:brightness(1.08); }
+    .mini-label { position:absolute; left:5px; top:5px; z-index:3; padding:3px 5px; background:#0a171ccc; border-radius:2px; color:white; font:10px Consolas,"Microsoft YaHei UI",monospace; white-space:nowrap; }
+    .road-overlay { position:absolute; inset:0; background:#8edce04c; mask-size:100% 100%; mask-repeat:no-repeat; pointer-events:none; }
+    .mini-box { position:absolute; border:1px solid #ffd195; }
+    .settings { display:flex; gap:9px; margin-top:11px; align-items:start; }
+    .lane-controls { display:flex; flex:1; flex-wrap:wrap; gap:16px; align-items:center; min-height:51px; padding:10px 14px; border:1px solid var(--line); border-radius:7px; background:#172129; }
+    .lane-controls label { display:flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; white-space:nowrap; }
+    .lane-controls input { accent-color:var(--red); }
+    .lane-controls span { color:var(--muted); font:11px Consolas,"Microsoft YaHei UI",monospace; }
+    .distance-settings { width:min(400px,34%); padding:11px 14px; border:1px solid var(--line); border-radius:7px; color:var(--muted); background:#172129; font-size:12px; }
+    .distance-settings summary { cursor:pointer; color:#dce7e6; }
+    .distance-settings p { margin-top:9px; line-height:1.55; }
+    .distance-settings label { display:block; margin-top:10px; }
+    .distance-settings input { width:68px; padding:4px; background:#0e171d; color:white; border:1px solid #536771; border-radius:3px; }
+    .foot { display:flex; justify-content:space-between; gap:20px; padding:18px 2px 0; margin-top:13px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; }
+    .foot b { color:#d5e2e1; }
+    @media(max-width:1120px) { .workspace { grid-template-columns:1fr; }.scene-wrap { height:550px; }.evidence-panel { display:grid; grid-template-columns:1fr 1.2fr; align-items:start; }.evidence-panel .panel-head { grid-column:1/-1; }.feed-wrap { grid-row:2/6; }.focus-readout,.feed-note,.object-title,.object-list { grid-column:2; }.object-list { max-height:280px; } #six-road-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+    @media(max-width:720px) { .shell { padding:13px 12px 26px; }.top { align-items:flex-start; }.brand-mark { width:36px;height:36px;font-size:24px; }.header-side { gap:7px; }.source { display:none; }.links a { padding:5px 7px; font-size:10px; }.links a:nth-child(2) { display:none; }.top p { display:none; }.disclosure { align-items:start; padding:9px 0; }.workspace { margin-top:10px; }.scene-wrap { height:430px; min-height:0; }.scene-legend { top:9px;left:9px; }.scene-compass { width:54px;height:54px;top:9px;right:9px; }.statusline { display:block; }.evidence-panel { display:flex; }.feed-wrap { margin:8px 8px 0; }.object-list { grid-template-columns:1fr 1fr; max-height:170px; }.settings { display:block; }.distance-settings { width:100%; margin-top:9px; } #six-road-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.foot { display:block; }.foot span { display:block;margin-top:7px; } }
+    @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">T</div><div><div class="eyebrow">TESLACAM / SIX VIEW SCENE</div><h1>六视角道路态势</h1><p>同一时刻的道路、车辆和行人</p></div></div>
+    <div class="header-side"><span class="source">H:\TESLACAM · 本地录像</span><nav class="links"><a href="reconstruction.html">查看六路实拍</a><a href="DIAGNOSTICS.md" target="_blank">重建诊断</a></nav></div>
+  </header>
+  <div class="disclosure"><span class="signal" aria-hidden="true"></span><span><b>单镜头空间估计</b>　3D 仅显示当前镜头的目标。六机位尚未完成几何配准；距离与方位都是近似值，不能用于驾驶。</span></div>
+  <section class="workspace" id="workspace">
+    <section class="panel scene-panel" aria-label="三维道路态势">
+      <div class="panel-head"><div><div class="panel-kicker">当前镜头 / 空间示意</div><h2>目标方位与估距</h2></div><small id="total">分析中</small></div>
+      <div class="scene-wrap"><canvas id="scene" aria-label="可旋转的三维道路和目标"></canvas>
+        <div class="scene-legend"><div class="legend-row"><i class="swatch" style="background:#f0f3f1"></i>本车</div><div class="legend-row"><i class="swatch" style="background:#8edce0"></i>车辆</div><div class="legend-row"><i class="swatch" style="background:#edbe78"></i>客车 / 货车</div><div class="legend-row"><i class="swatch" style="background:#ed6763"></i>行人</div><div class="legend-row"><i class="swatch" style="background:#f0f3f1"></i>重绘标线</div></div>
+        <div class="scene-compass" aria-hidden="true"><span>前</span></div><div class="scene-help">拖动旋转 · 滚轮缩放 · 点击目标看原画</div>
+      </div>
+      <div class="statusline"><strong id="counts">检测中</strong><span>3D 仅显示所选镜头；地面不再铺未经标定的道路分割图。点击下方画面切换。</span></div>
+    </section>
+    <section class="panel evidence-panel" aria-label="实拍画面对照">
+      <div class="panel-head"><div><div class="panel-kicker">实拍对照 / 检测来源</div><h2>所选镜头</h2></div><span class="feed-name" id="feed-name">前摄</span></div>
+      <div class="feed-wrap"><img id="feed" alt="所选镜头的真实画面"><svg id="feed-lanes" class="lane-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg><div id="boxes" class="boxes"></div></div>
+      <div class="focus-readout" id="focus-readout">点击车辆图标或目标列表，查看它来自哪个镜头</div>
+      <p class="feed-note">彩框为原画检测；裁切、遮挡或低置信度目标暂不估距。</p>
+      <div class="object-title">当前时刻 · 六路目标</div><div id="object-list" class="object-list"></div>
+    </section>
+  </section>
+  <div class="control"><button id="play" type="button">▶ 播放</button><input id="seek" type="range" min="0" max="__LAST__" value="20" aria-label="六路同步时间轴"><span id="time">20 / __LAST__ 秒</span></div>
+  <section class="strip" aria-label="六路原画"><div class="strip-head"><div><div class="panel-kicker">六机位 / 同步证据</div><h2>选择镜头</h2></div><p>青色为路面与标线候选 · 彩框为检测目标</p></div><div id="six-road-grid"></div></section>
+  <div class="settings"><div class="lane-controls" id="lane-controls"><label><input id="show-lanes" type="checkbox" checked>重绘标线</label><label><input id="show-boundaries" type="checkbox">待核实边界</label><span id="lane-count"></span></div>
+    <details class="distance-settings"><summary>估距参数与局限</summary><p>按类别假设目标高度和镜头视角推算。小汽车高度假设 1.35–2.1 米，客车 2.2–3.8 米。</p><label><span id="distance-camera">前摄</span>水平视角　<input id="distance-fov" type="number" min="30" max="145" step="1" value="70">°</label><p>范围反映高度、视角和检测框变化，不等于真实误差上限。距离从相机起算。</p></details>
+  </div>
+  <footer class="foot"><span><b>数据：</b>六路同步抽帧 · 逐帧识别 · 本地离线查看</span><span>车道跨镜头尚未配准，图中三维位置只作示意。</span></footer>
+</main>
+<script id="frames-data" type="application/json">__FRAMES__</script><script id="detections-data" type="application/json">__DETECTIONS__</script><script id="road-data" type="application/json">__ROAD__</script><script id="lane-data" type="application/json">__LANES__</script><script id="camera-info-data" type="application/json">__CAMERA_INFO__</script><script>__BUNDLE__</script>
+</body></html>

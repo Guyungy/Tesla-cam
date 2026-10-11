@@ -19,7 +19,7 @@ const DEFAULTS: AppSettings = {
   autoAdvance: true,
   preferredView: null,
   autoSeekEvent: true,
-  sentryCameraFocus: true,
+  sentryCameraFocus: false,
 };
 
 // ── Tiny external store (same pattern as useExportSettings) ──

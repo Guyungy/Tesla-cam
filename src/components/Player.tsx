@@ -12,6 +12,7 @@ type Props = {
   playbackRate: number;
   full?: boolean;
   className?: string;
+  order?: number;
   label?: string;
   onChangeState?: (name: CamName, state: PlayerState) => void;
   onDoubleClick?: () => void;
@@ -26,6 +27,7 @@ export function Player({
   playbackRate,
   full,
   className,
+  order,
   label,
   onChangeState,
   onDoubleClick,
@@ -122,6 +124,7 @@ export function Player({
         className,
       )}
       onDoubleClick={onDoubleClick}
+      style={{ order }}
     >
       {url ? (
         <video
@@ -135,7 +138,7 @@ export function Player({
           }}
           onTimeUpdate={handleTimeUpdate}
           onEnded={() => updateState({ ended: true })}
-          className="max-h-full max-w-full object-contain"
+          className="h-full w-full object-contain"
         />
       ) : (
         <div className="h-full w-full bg-black" />

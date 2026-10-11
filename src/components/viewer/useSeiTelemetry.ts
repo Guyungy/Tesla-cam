@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import type { CamClip, CamFootage, SEIDataPoint } from '../../utils';
 import {
   detectHardBraking,
+  footageCacheKey,
   loadFootageSEI,
   probeCodecFromFiles,
   shareInflight,
@@ -36,10 +37,11 @@ export function useSeiTelemetry({
   onFootageUpdate,
   clipPlayedSeconds,
 }: Params) {
+  const extractionKey = footageCacheKey(clip);
   // ── Lazy SEI metadata extraction (runs once per clip, off-thread) ──
   useEffect(() => {
     if (footage.seiData) return; // Already loaded
-    const clipName = clip.name;
+    const clipName = extractionKey;
 
     // Share the in-flight extraction by clip rather than latching a boolean.
     // StrictMode runs effects twice in development: the first pass' cleanup
@@ -88,7 +90,7 @@ export function useSeiTelemetry({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip.name]); // Only run once per clip
+  }, [extractionKey]); // Different recordings must never share an extraction.
 
   // ── Series (real data only — never invent speed/gear) ──
   const seiSeries = useMemo<SEIDataPoint[]>(

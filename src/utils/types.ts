@@ -1,6 +1,11 @@
 export type ClipType = 'recent' | 'saved' | 'sentry';
 
 export type CamClip = {
+  /** Source-directory identity; never use the display name as an identifier. */
+  id?: string;
+  /** Explicitly recognized files owned by this clip, including sidecars. */
+  sourceFiles?: File[];
+  eventFile?: File;
   name: string;
   type?: ClipType;
   saveType?: 'aeb' | 'manual';

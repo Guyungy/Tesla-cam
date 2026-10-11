@@ -6,7 +6,13 @@ import { MdLocalMovies, MdSdStorage, MdSecurity } from 'react-icons/md';
 
 import { useI18n } from '../i18n';
 import type { CamClip, ClipType } from '../utils';
-import { layoutRows, parseTime, rowIndexAt, visibleRange } from '../utils';
+import {
+  clipIdentity,
+  layoutRows,
+  parseTime,
+  rowIndexAt,
+  visibleRange,
+} from '../utils';
 import { Clip } from './Clip';
 
 type Props = {
@@ -14,6 +20,7 @@ type Props = {
   activeClip?: CamClip;
   onSelect: (clip: CamClip) => void;
   onOpenFolder: () => void;
+  onVisibleItemsChange?: (items: CamClip[]) => void;
 };
 
 type FilterType = ClipType | 'all';
@@ -51,7 +58,13 @@ type HeaderSpan = {
   count: number;
 };
 
-export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
+export function Sidebar({
+  items,
+  activeClip,
+  onSelect,
+  onOpenFolder,
+  onVisibleItemsChange,
+}: Props) {
   const { t } = useI18n();
   const [filter, setFilter] = useState<FilterType>('all');
   const [search, setSearch] = useState('');
@@ -116,6 +129,10 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
       return matchType && matchSearch;
     });
   }, [items, filter, search]);
+
+  useEffect(() => {
+    onVisibleItemsChange?.(filteredItems);
+  }, [filteredItems, onVisibleItemsChange]);
 
   // Group filtered items by date
   const dateGroups = useMemo<DateGroup[]>(() => {
@@ -197,7 +214,7 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
         count: group.clips.length,
       });
       for (const clip of group.clips) {
-        out.push({ kind: 'clip', key: `c:${clip.name}`, clip });
+        out.push({ kind: 'clip', key: `c:${clipIdentity(clip)}`, clip });
       }
     }
     return out;
@@ -263,7 +280,9 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
     const el = scrollRef.current;
     if (!el) return;
     const index = rows.findIndex(
-      (row) => row.kind === 'clip' && row.clip.name === activeClip.name,
+      (row) =>
+        row.kind === 'clip' &&
+        clipIdentity(row.clip) === clipIdentity(activeClip),
     );
     const span = spans[index];
     if (!span) return;
@@ -376,7 +395,10 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder }: Props) {
                     ) : (
                       <Clip
                         item={row.clip}
-                        active={row.clip.name === activeClip?.name}
+                        active={
+                          !!activeClip &&
+                          clipIdentity(row.clip) === clipIdentity(activeClip)
+                        }
                         onClick={() => onSelect(row.clip)}
                       />
                     )}

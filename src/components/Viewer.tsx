@@ -53,6 +53,7 @@ type Props = {
   onClipEnded?: () => void;
   /** One-shot review target supplied by the wheel candidate scanner. */
   initialSeekSeconds?: number;
+  onExportingChange?: (busy: boolean) => void;
 };
 
 const TESLA_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M40 2L10 2C9.445 2 9 2.449 9 3L9 47C9 47.551 9.445 48 10 48L40 48C40.555 48 41 47.551 41 47L41 3C41 2.449 40.555 2 40 2ZM23.137 10.094C24.375 10.063 25.625 10.063 26.867 10.094C30.074 10.176 33.285 10.515 36.309 11.539L35.633 12.531C33.074 11.633 30.035 11.199 26.828 11.105C25.617 11.066 24.383 11.066 23.172 11.105C19.965 11.199 16.93 11.633 14.367 12.531L13.695 11.539C16.719 10.515 19.926 10.176 23.137 10.094ZM17.086 37.078C17.02 37.359 16.793 37.594 16.484 37.715L15.547 37.715L15.492 37.738L15.492 40.27L14.906 40.27L14.906 37.738L14.859 37.715L13.922 37.715C13.613 37.594 13.387 37.359 13.32 37.078L13.32 37.074L17.086 37.074ZM21.34 40.266L19.113 40.266C18.801 40.141 18.57 39.906 18.508 39.625L21.941 39.625C21.879 39.906 21.652 40.141 21.34 40.266ZM21.34 38.965L19.113 38.965C18.801 38.844 18.57 38.605 18.508 38.328L21.941 38.328C21.879 38.605 21.652 38.844 21.34 38.965ZM21.34 37.727L19.113 37.727C18.801 37.602 18.57 37.367 18.508 37.086L21.941 37.086C21.879 37.367 21.652 37.602 21.34 37.727ZM26.867 40.27L23.617 40.27L23.629 40.246C23.691 39.965 23.918 39.75 24.223 39.625L26.289 39.625L26.289 38.965L23.617 38.965L23.617 37.078L26.852 37.078C26.785 37.359 26.559 37.609 26.25 37.703L24.191 37.703L24.191 38.336L26.867 38.336ZM31.16 40.246L28.523 40.238L28.523 37.078L29.102 37.074L29.098 39.617L31.668 39.617C31.605 39.883 31.449 40.113 31.16 40.246ZM28.453 13.633L25 32.164L21.547 13.633C19.699 13.633 17.781 13.918 17.73 15.277C16.863 15.059 15.281 14.074 14.918 13.383C17.555 12.316 21.902 12.176 23.789 12.246L25 13.8L26.211 12.246C28.098 12.176 32.449 12.316 35.086 13.383C34.719 14.074 33.137 15.059 32.266 15.277C32.219 13.918 30.297 13.633 28.453 13.633ZM36.602 40.258L36.027 40.258L36.027 38.969L33.934 38.969L33.934 40.258L33.355 40.258L33.355 38.32L36.602 38.324ZM36.086 37.711L33.859 37.711C33.547 37.586 33.305 37.363 33.246 37.082L36.68 37.082C36.617 37.363 36.398 37.586 36.086 37.711Z" fill="white"/></svg>`;
@@ -73,16 +74,6 @@ function errText(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
 }
-
-/** Display labels for camera names (UI) */
-const CAM_LABELS: Record<CamName, string> = {
-  front: 'Front',
-  back: 'Back',
-  left: 'Left',
-  right: 'Right',
-  left_pillar: 'L-Pillar',
-  right_pillar: 'R-Pillar',
-};
 
 /** i18n keys for camera name overlays on export canvas */
 const CAM_I18N_KEYS: Record<CamName, TranslationKey> = {
@@ -114,6 +105,7 @@ export function Viewer({
   onDelete,
   onClipEnded,
   initialSeekSeconds,
+  onExportingChange,
 }: Props) {
   const { t } = useI18n();
   const { exportSettings } = useExportSettings();
@@ -371,16 +363,13 @@ export function Viewer({
   }, [clip.type, clip.event?.camera, footage.segments]);
 
   // ── View Type (sentry trigger camera > user preference > default) ──
-  const defaultView: ViewType = hasPillarCams ? 'grid6' : 'grid4';
+  const defaultView: ViewType = 'grid6';
   const [viewType, setViewTypeState] = useState<ViewType>(() => {
     if (appSettings.sentryCameraFocus && sentryCam) return sentryCam;
     const preferred = appSettings.preferredView;
     if (!preferred) return defaultView;
     // Pillar-cam layouts fall back gracefully when the clip lacks those cams
-    if (
-      !hasPillarCams &&
-      (preferred === 'grid6' || preferred.includes('pillar'))
-    ) {
+    if (!hasPillarCams && preferred.includes('pillar')) {
       return defaultView;
     }
     return preferred;
@@ -409,10 +398,33 @@ export function Viewer({
 
   const isSingleView = !viewType.startsWith('grid');
 
+  const toggleCameraZoom = useCallback(
+    (cam: CamName) => {
+      const current = visibleCams
+        .map((name) => refMap[name].current)
+        .filter(
+          (video): video is HTMLVideoElement =>
+            !!video && video.readyState >= 1,
+        );
+      const seconds = current.length
+        ? Math.max(...current.map((video) => video.currentTime))
+        : segmentPlayedSeconds;
+      setSeekTask({ index: segmentIndex, seconds });
+      setViewType(isSingleView ? 'grid6' : cam);
+    },
+    [
+      visibleCams,
+      refMap,
+      segmentPlayedSeconds,
+      segmentIndex,
+      setViewType,
+      isSingleView,
+    ],
+  );
+
   // Filter layout options based on available cameras
   const availableLayouts = useMemo(() => {
     return LAYOUT_OPTIONS.filter((opt) => {
-      if (opt.id === 'grid6' && !hasPillarCams) return false;
       if (opt.id === 'left_pillar' && !hasPillarCams) return false;
       if (opt.id === 'right_pillar' && !hasPillarCams) return false;
       return true;
@@ -833,6 +845,10 @@ export function Viewer({
     setExportOut,
     exportCurrentView,
   ]);
+  useEffect(() => {
+    onExportingChange?.(exporting);
+    return () => onExportingChange?.(false);
+  }, [exporting, onExportingChange]);
 
   // ── Keyboard Shortcuts ──
   const handleKeyboardControl = useCallback(
@@ -1010,30 +1026,28 @@ export function Viewer({
       case 'grid4':
         return 'grid grid-cols-2 grid-rows-2';
       case 'grid4old':
-        return 'flex flex-col';
+        return 'grid grid-cols-3';
       default:
-        return 'flex items-center justify-center';
+        return 'grid grid-cols-1 grid-rows-1';
     }
   }, [viewType]);
 
   // ── Render helpers for each layout ──
   const renderPlayer = useCallback(
-    (cam: CamName, extraClass?: string) => (
+    (cam: CamName, extraClass?: string, order?: number) => (
       <Player
         key={cam}
         videoRef={refMap[cam]}
         url={segment[cam]}
         playing={playing}
         playbackRate={playbackRate}
-        full={isSingleView && viewType === cam}
         className={extraClass}
-        label={isSingleView ? undefined : CAM_LABELS[cam]}
+        order={order}
+        label={isSingleView ? undefined : t(CAM_I18N_KEYS[cam])}
         onChangeState={handleChangeState}
         unique={cam}
         index={segmentIndex}
-        onDoubleClick={() =>
-          setViewType(isSingleView ? (hasPillarCams ? 'grid6' : 'grid4') : cam)
-        }
+        onDoubleClick={() => toggleCameraZoom(cam)}
       />
     ),
     [
@@ -1041,14 +1055,39 @@ export function Viewer({
       playing,
       playbackRate,
       isSingleView,
-      viewType,
       handleChangeState,
       segmentIndex,
       refMap,
-      hasPillarCams,
-      setViewType,
+      toggleCameraZoom,
+      t,
     ],
   );
+
+  const hasExportRange =
+    exportIn !== undefined && exportOut !== undefined && exportOut > exportIn;
+  const exportStart = hasExportRange ? exportIn : clipPlayedSeconds;
+  const exportRange = `${formatExportPoint(exportStart)}–${formatExportPoint(exportStart + exportableSeconds)}`;
+  const exportView =
+    LAYOUT_OPTIONS.find((option) => option.id === viewType)?.label ?? viewType;
+  const exportResolution =
+    exportSettings.videoMaxWidth === 3840
+      ? '4K'
+      : `${exportSettings.videoMaxWidth}px`;
+  const [activeExportDetails, setActiveExportDetails] = useState<{
+    range: string;
+    view: string;
+    resolution: string;
+    duration: number;
+  }>();
+  const shownExportDetails =
+    exporting && activeExportDetails
+      ? activeExportDetails
+      : {
+          range: exportRange,
+          view: exportView,
+          resolution: exportResolution,
+          duration: exportableSeconds,
+        };
 
   return (
     <div className="animate-fade-in relative flex h-full min-h-0 flex-col gap-3">
@@ -1056,6 +1095,10 @@ export function Viewer({
       <ExportModal
         open={exporting}
         progress={exportProgress}
+        clipName={clip.name}
+        range={shownExportDetails.range}
+        view={shownExportDetails.view}
+        resolution={shownExportDetails.resolution}
         frameCount={exportFrameCount}
         eta={exportEta}
         encoding={exportEncoding}
@@ -1113,65 +1156,45 @@ export function Viewer({
         <TrackMap data={seiSeries} playedSeconds={clipPlayedSeconds} />
 
         {/* Video Grid */}
-        <div className={clsx('h-full w-full', gridClass)}>
-          {viewType === 'grid6' && (
-            <>
-              {renderPlayer('left', 'border-r border-b border-white/5')}
-              {renderPlayer('front', 'border-r border-b border-white/5')}
-              {renderPlayer('right', 'border-b border-white/5')}
-              {renderPlayer('left_pillar', 'border-r border-white/5')}
-              {renderPlayer('back', 'border-r border-white/5')}
-              {renderPlayer('right_pillar')}
-            </>
-          )}
-
-          {viewType === 'grid4' && (
-            <>
-              {renderPlayer('front', 'border-r border-b border-white/5')}
-              {renderPlayer('back', 'border-b border-white/5')}
-              {renderPlayer('left', 'border-r border-white/5')}
-              {renderPlayer('right')}
-            </>
-          )}
-
-          {viewType === 'grid4old' && (
-            <>
-              {/* Top: front camera — takes 60% height, full width */}
-              <div className="relative h-[60%] w-full border-b border-white/5">
-                {renderPlayer('front')}
-              </div>
-              {/* Bottom: 3 cameras side by side — takes 40% height */}
-              <div className="flex h-[40%] w-full">
-                <div className="relative h-full w-1/3 border-r border-white/5">
-                  {renderPlayer('left')}
-                </div>
-                <div className="relative h-full w-1/3 border-r border-white/5">
-                  {renderPlayer('back')}
-                </div>
-                <div className="relative h-full w-1/3">
-                  {renderPlayer('right')}
-                </div>
-              </div>
-            </>
-          )}
-
-          {isSingleView && renderPlayer(viewType as CamName)}
-        </div>
-
-        {/* Hidden players for cameras not in current layout (keep them mounted for sync) */}
-        <div className="hidden">
-          {ALL_CAMS.filter((c) => !visibleCams.includes(c)).map((cam) => (
-            <Player
-              key={`hidden-${cam}`}
-              videoRef={refMap[cam]}
-              url={segment[cam]}
-              playing={playing}
-              playbackRate={playbackRate}
-              onChangeState={handleChangeState}
-              unique={cam}
-              index={segmentIndex}
-            />
-          ))}
+        <div
+          className={clsx('h-full w-full', gridClass)}
+          style={
+            viewType === 'grid4old'
+              ? { gridTemplateRows: 'repeat(5, minmax(0, 1fr))' }
+              : undefined
+          }
+        >
+          {ALL_CAMS.map((cam) => {
+            const visible = visibleCams.includes(cam);
+            const oldLayout = viewType === 'grid4old';
+            const layoutOrder: CamName[] =
+              viewType === 'grid6'
+                ? [
+                    'left',
+                    'front',
+                    'right',
+                    'left_pillar',
+                    'back',
+                    'right_pillar',
+                  ]
+                : oldLayout
+                  ? ['front', 'left', 'back', 'right']
+                  : ['front', 'back', 'left', 'right'];
+            const position = oldLayout
+              ? cam === 'front'
+                ? 'col-span-3 row-span-3'
+                : 'row-span-2'
+              : '';
+            return renderPlayer(
+              cam,
+              clsx(
+                !visible && 'hidden',
+                visible && position,
+                visible && !isSingleView && 'border-r border-b border-white/5',
+              ),
+              layoutOrder.indexOf(cam),
+            );
+          })}
         </div>
       </div>
 
@@ -1234,6 +1257,33 @@ export function Viewer({
           <span>{formatDuration(footage.duration)}</span>
         </div>
 
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-white/5 pt-3 text-[11px] text-neutral-400">
+          <span>
+            <span className="text-neutral-500">{t('export.range')}</span>{' '}
+            <span className="ml-1 font-medium text-neutral-200 tabular-nums">
+              {shownExportDetails.range}
+            </span>
+          </span>
+          <span>
+            <span className="text-neutral-500">{t('export.duration')}</span>{' '}
+            <span className="ml-1 font-medium text-neutral-200 tabular-nums">
+              {formatDuration(shownExportDetails.duration)}
+            </span>
+          </span>
+          <span>
+            <span className="text-neutral-500">{t('export.view')}</span>{' '}
+            <span className="ml-1 font-medium text-neutral-200">
+              {shownExportDetails.view}
+            </span>
+          </span>
+          <span>
+            <span className="text-neutral-500">{t('export.resolution')}</span>{' '}
+            <span className="ml-1 font-medium text-neutral-200">
+              {shownExportDetails.resolution}
+            </span>
+          </span>
+        </div>
+
         {/* Buttons */}
         <div className="flex items-center justify-between">
           {/* Left: Export Tools */}
@@ -1247,9 +1297,9 @@ export function Viewer({
                     ? 'bg-brand-primary/20 text-brand-primary'
                     : 'text-neutral-500 hover:text-neutral-300',
                 )}
-                title="Set In point (I)"
+                title={t('export.setIn')}
               >
-                IN {formatExportPoint(exportIn)}
+                {t('export.in')} {formatExportPoint(exportIn)}
               </button>
               <button
                 onClick={markExportOut}
@@ -1259,9 +1309,9 @@ export function Viewer({
                     ? 'bg-brand-primary/20 text-brand-primary'
                     : 'text-neutral-500 hover:text-neutral-300',
                 )}
-                title="Set Out point (O)"
+                title={t('export.setOut')}
               >
-                OUT {formatExportPoint(exportOut)}
+                {t('export.out')} {formatExportPoint(exportOut)}
               </button>
               {(exportIn !== undefined || exportOut !== undefined) && (
                 <button
@@ -1277,7 +1327,15 @@ export function Viewer({
               )}
             </div>
             <button
-              onClick={() => void exportCurrentView()}
+              onClick={() => {
+                setActiveExportDetails({
+                  range: exportRange,
+                  view: exportView,
+                  resolution: exportResolution,
+                  duration: exportableSeconds,
+                });
+                void exportCurrentView();
+              }}
               disabled={exporting || exportableSeconds <= 0}
               className="bg-brand-primary disabled:hover:bg-brand-primary flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-white transition-colors hover:bg-red-600 disabled:opacity-50"
             >
