@@ -96,7 +96,7 @@ function makeRequest(
 function readOr(file?: string): string {
   if (!file) return '';
   try {
-    return fs.readFileSync(file, 'utf8');
+    return fs.readFileSync(file.replace(/\\:/g, ':'), 'utf8');
   } catch {
     return '';
   }
@@ -346,14 +346,14 @@ test('CJK overlay text resolves to a CJK-capable font, not a Latin fallback', ()
     path.join(tmpRoot, 'font.mp4'),
   );
   const cjkFaceRe =
-    /(PingFang|Hiragino.?Sans|Heiti|Songti|Kaiti|YaHei|SimSun|SimHei|NotoSansCJK|NotoSerifCJK|SourceHanSans|WenQuanYi|Arial.?Unicode)/i;
+    /(PingFang|Hiragino.?Sans|Heiti|Songti|Kaiti|YaHei|msyh|SimSun|SimHei|NotoSansCJK|NotoSerifCJK|SourceHanSans|WenQuanYi|Arial.?Unicode)/i;
 
   let checked = 0;
   for (const filter of graphOf(prepared).split(';')) {
     if (!filter.includes('drawtext=')) continue;
     const textFile = filter.match(/textfile='([^']+)'/)?.[1];
     if (!textFile) continue;
-    const text = fs.readFileSync(textFile, 'utf8');
+    const text = fs.readFileSync(textFile.replace(/\\:/g, ':'), 'utf8');
     if (!/[\u3000-\u9fff]/.test(text)) continue;
 
     checked++;
@@ -422,7 +422,7 @@ test('the resolved CJK font renders different pixels than a Latin face', () => {
         '-frames:v',
         '1',
         '-vf',
-        `drawtext=fontfile='${font.replace(/:/g, '\\:')}':textfile='${cjk!.textFile}':expansion=none:fontcolor=white:fontsize=34:x=10:y=20`,
+        `drawtext=fontfile='${font.replace(/\\/g, '/').replace(/:/g, '\\:')}':textfile='${cjk!.textFile}':expansion=none:fontcolor=white:fontsize=34:x=10:y=20`,
         out,
       ],
       { encoding: 'utf8' },

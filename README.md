@@ -265,16 +265,26 @@ Tesla-cam/
 ## 🧪 开发与测试
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 
-npm run lint
-npx tsc -b
-npx tsc -p tsconfig.electron.json
-npm test
+pnpm lint
+pnpm exec tsc -b
+pnpm exec tsc -p tsconfig.electron.json
+pnpm test
 ```
 
 依赖真实 TeslaCam 素材的测试在没有接入素材时会自动跳过。CI 配置见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+
+### 实验性视觉分析脚本
+
+仓库的 `scripts/` 提供六视角抽帧、目标与车道线检测、相机重叠诊断和离线 3D 示意页面生成工具。六摄像头的精确内外参尚未标定，生成的空间位置和距离不可用于测量。
+
+`detect_lane_change_candidates.py` 是**前摄周围车辆变道候选**的独立原型：连续帧检测车辆和标线，跟踪车辆，筛选跨越同一条可见标线的片段，输出供人工回看的 JSON。候选不是已确认变道；没有候选也不代表录像中没有变道。该功能尚未接入主界面。运行时需自行提供 YOLO26m 与 YOLOP 的 ONNX 模型文件；不要将私人行车视频或生成画面提交到公开仓库。
+
+```powershell
+python scripts/detect_lane_change_candidates.py --input "D:\TeslaCam\SavedClips\片段目录" --vehicle-model "D:\models\yolo26m.onnx" --lane-model "D:\models\yolop-640-640.onnx" --start 0 --duration 30 --fps 2 --output "D:\lane-change-candidates.json"
+```
 
 ---
 
