@@ -18,7 +18,11 @@ function getSelectedPath(file: File): string {
     const version = `${file.size}:${file.lastModified}`;
     if (selectedFiles.get(resolved) !== version) {
       selectedFiles.set(resolved, version);
-      ipcRenderer.send('authorize-source-file', { path: resolved, size: file.size, lastModified: file.lastModified });
+      ipcRenderer.send('authorize-source-file', {
+        path: resolved,
+        size: file.size,
+        lastModified: file.lastModified,
+      });
     }
   }
   return resolved;
@@ -36,8 +40,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('show-item-in-folder', path),
   getPathForFile: getSelectedPath,
   trashFiles: (paths: string[], clipName: string, locale?: string) => {
-    if (!Array.isArray(paths) || !paths.length || paths.some((p) => !selectedFiles.has(p))) {
-      return Promise.resolve({ ok: false, error: 'Files were not selected in this window' });
+    if (
+      !Array.isArray(paths) ||
+      !paths.length ||
+      paths.some((p) => !selectedFiles.has(p))
+    ) {
+      return Promise.resolve({
+        ok: false,
+        error: 'Files were not selected in this window',
+      });
     }
     return ipcRenderer.invoke('trash-files', { paths, clipName, locale });
   },

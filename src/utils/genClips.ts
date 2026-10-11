@@ -1,6 +1,10 @@
 import dayjs from 'dayjs';
 
-import { isCameraVideo, normalizedSourcePath, sourcePath } from './clipIdentity';
+import {
+  isCameraVideo,
+  normalizedSourcePath,
+  sourcePath,
+} from './clipIdentity';
 import { parseClipType, parseSaveType } from './parseFileType';
 import { parseTime } from './parseTime';
 import { readEvent } from './readEvent';
@@ -11,7 +15,8 @@ export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
   const map = new Map<string, CamClip>();
   for (const file of files) {
     const video = isCameraVideo(file.name);
-    if (!video && file.name !== 'thumb.png' && file.name !== 'event.json') continue;
+    if (!video && file.name !== 'thumb.png' && file.name !== 'event.json')
+      continue;
     const paths = file.webkitRelativePath.split('/');
     const parentDir = paths.at(-2);
     if (!parentDir) continue;
@@ -24,7 +29,8 @@ export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
       clip = {
         id: directory,
         name: parentDir,
-        type: parentDir === 'RecentClips' ? 'recent' : parseClipType(paths.at(-3)),
+        type:
+          parentDir === 'RecentClips' ? 'recent' : parseClipType(paths.at(-3)),
         videos: [],
         sourceFiles: [],
         sourcePaths: [],
@@ -47,6 +53,9 @@ export async function genClips(files: FileList | File[]): Promise<CamClip[]> {
     if (clip.type === 'recent') clip.name = clip.videos[0].name.slice(0, 19);
     clip.sourcePaths = [...new Set(clip.sourcePaths)];
   }
-  clips.sort((a, b) => dayjs(parseTime(b.name)).valueOf() - dayjs(parseTime(a.name)).valueOf());
+  clips.sort(
+    (a, b) =>
+      dayjs(parseTime(b.name)).valueOf() - dayjs(parseTime(a.name)).valueOf(),
+  );
   return clips;
 }

@@ -185,11 +185,15 @@ export function App() {
       <Home
         items={clips}
         lastFolder={lastFolder}
-        onOpenFolder={() => { if (!busyRef.current) inputEl.current?.click(); }}
+        onOpenFolder={() => {
+          if (!busyRef.current) inputEl.current?.click();
+        }}
         onDeleteClip={(clip, replacement) => {
-          setClips((current) => current.flatMap((item) =>
-            item === clip ? (replacement ? [replacement] : []) : [item],
-          ));
+          setClips((current) =>
+            current.flatMap((item) =>
+              item === clip ? (replacement ? [replacement] : []) : [item],
+            ),
+          );
         }}
         onBusyChange={handleBusyChange}
       />

@@ -6,7 +6,13 @@ import { MdLocalMovies, MdSdStorage, MdSecurity } from 'react-icons/md';
 
 import { useI18n } from '../i18n';
 import type { CamClip, ClipType } from '../utils';
-import { clipIdentity, layoutRows, parseTime, rowIndexAt, visibleRange } from '../utils';
+import {
+  clipIdentity,
+  layoutRows,
+  parseTime,
+  rowIndexAt,
+  visibleRange,
+} from '../utils';
 import { Clip } from './Clip';
 
 type Props = {
@@ -52,7 +58,13 @@ type HeaderSpan = {
   count: number;
 };
 
-export function Sidebar({ items, activeClip, onSelect, onOpenFolder, onVisibleItemsChange }: Props) {
+export function Sidebar({
+  items,
+  activeClip,
+  onSelect,
+  onOpenFolder,
+  onVisibleItemsChange,
+}: Props) {
   const { t } = useI18n();
   const [filter, setFilter] = useState<FilterType>('all');
   const [search, setSearch] = useState('');
@@ -268,7 +280,9 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder, onVisibleIt
     const el = scrollRef.current;
     if (!el) return;
     const index = rows.findIndex(
-      (row) => row.kind === 'clip' && clipIdentity(row.clip) === clipIdentity(activeClip),
+      (row) =>
+        row.kind === 'clip' &&
+        clipIdentity(row.clip) === clipIdentity(activeClip),
     );
     const span = spans[index];
     if (!span) return;
@@ -381,7 +395,10 @@ export function Sidebar({ items, activeClip, onSelect, onOpenFolder, onVisibleIt
                     ) : (
                       <Clip
                         item={row.clip}
-                        active={!!activeClip && clipIdentity(row.clip) === clipIdentity(activeClip)}
+                        active={
+                          !!activeClip &&
+                          clipIdentity(row.clip) === clipIdentity(activeClip)
+                        }
                         onClick={() => onSelect(row.clip)}
                       />
                     )}

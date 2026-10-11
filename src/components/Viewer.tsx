@@ -1055,7 +1055,6 @@ export function Viewer({
       playing,
       playbackRate,
       isSingleView,
-      viewType,
       handleChangeState,
       segmentIndex,
       refMap,

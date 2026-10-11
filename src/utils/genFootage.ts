@@ -68,62 +68,67 @@ export async function genFootage(
 ): Promise<CamFootage> {
   const urls: string[] = [];
   try {
-  const map: Record<string, CamSegment> = {};
+    const map: Record<string, CamSegment> = {};
 
-  // Create object URLs synchronously (cheap); probe durations in parallel.
-  type Job = { file: File; camName: CamName; segName: string; fileURL: string };
-  const jobs: Job[] = [];
+    // Create object URLs synchronously (cheap); probe durations in parallel.
+    type Job = {
+      file: File;
+      camName: CamName;
+      segName: string;
+      fileURL: string;
+    };
+    const jobs: Job[] = [];
 
-  for (const file of files) {
-    const camName = resolveCamName(file.name);
-    if (!camName) continue;
-    const segName = file.name.slice(0, 19);
-    if (!map[segName]) {
-      map[segName] = { name: segName, duration: 0, startSeconds: 0 };
+    for (const file of files) {
+      const camName = resolveCamName(file.name);
+      if (!camName) continue;
+      const segName = file.name.slice(0, 19);
+      if (!map[segName]) {
+        map[segName] = { name: segName, duration: 0, startSeconds: 0 };
+      }
+      const fileURL = URL.createObjectURL(file);
+      urls.push(fileURL);
+      map[segName][camName] = fileURL;
+      jobs.push({ file, camName, segName, fileURL });
     }
-    const fileURL = URL.createObjectURL(file);
-    urls.push(fileURL);
-    map[segName][camName] = fileURL;
-    jobs.push({ file, camName, segName, fileURL });
-  }
 
-  await mapPool(
-    jobs,
-    CONCURRENCY,
-    async (job) => {
-      let duration = await probeMp4DurationFromFile(job.file);
-      if (!(duration > 0)) {
-        duration = await probeDurationFromUrl(job.fileURL);
-      }
-      if (duration > 0) {
-        const seg = map[job.segName];
-        if (!seg.duration || duration > seg.duration) {
-          seg.duration = duration;
+    await mapPool(
+      jobs,
+      CONCURRENCY,
+      async (job) => {
+        let duration = await probeMp4DurationFromFile(job.file);
+        if (!(duration > 0)) {
+          duration = await probeDurationFromUrl(job.fileURL);
         }
-      }
-      return duration;
-    },
-    onProgress,
-  );
+        if (duration > 0) {
+          const seg = map[job.segName];
+          if (!seg.duration || duration > seg.duration) {
+            seg.duration = duration;
+          }
+        }
+        return duration;
+      },
+      onProgress,
+    );
 
-  // Fallback duration for segments that still have 0 (use 60s like Python path)
-  for (const seg of Object.values(map)) {
-    if (!(seg.duration > 0)) seg.duration = 60;
-  }
+    // Fallback duration for segments that still have 0 (use 60s like Python path)
+    for (const seg of Object.values(map)) {
+      if (!(seg.duration > 0)) seg.duration = 60;
+    }
 
-  const segments = Object.values(map);
-  segments.sort(
-    (a, b) =>
-      dayjs(parseTime(a.name)).valueOf() - dayjs(parseTime(b.name)).valueOf(),
-  );
+    const segments = Object.values(map);
+    segments.sort(
+      (a, b) =>
+        dayjs(parseTime(a.name)).valueOf() - dayjs(parseTime(b.name)).valueOf(),
+    );
 
-  let duration = 0;
-  segments.forEach((i) => {
-    i.startSeconds = duration;
-    duration += i.duration;
-  });
+    let duration = 0;
+    segments.forEach((i) => {
+      i.startSeconds = duration;
+      duration += i.duration;
+    });
 
-  return { segments, duration, urls };
+    return { segments, duration, urls };
   } catch (error) {
     urls.forEach((url) => URL.revokeObjectURL(url));
     throw error;

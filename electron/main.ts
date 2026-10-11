@@ -11,13 +11,18 @@ import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
-import { pathKey, recycleManifest, snapshotSource, validateTrashManifest, type SourceSnapshot } from './safeTrash.js';
-
 import { prepareComposeExport } from './composeExport.js';
 import type {
   ComposeExportRequest,
   ComposeExportResult,
 } from './composeTypes.js';
+import {
+  pathKey,
+  recycleManifest,
+  snapshotSource,
+  type SourceSnapshot,
+  validateTrashManifest,
+} from './safeTrash.js';
 import {
   cancelVisionScan,
   getVisionThumbnail,
@@ -80,17 +85,25 @@ function validateComposeRequest(req: ComposeExportRequest): string | null {
 // Exact selected-file capabilities, scoped to the trusted main frame/window.
 const authorizedSources = new Map<number, Map<string, SourceSnapshot>>();
 const deletingWindows = new Set<number>();
-function trustedSourceEvent(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
+function trustedSourceEvent(
+  event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent,
+): boolean {
   if (event.senderFrame !== event.sender.mainFrame) return false;
-  const expected = !app.isPackaged && process.env['ELECTRON_RENDERER_URL']
-    ? process.env['ELECTRON_RENDERER_URL']
-    : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
+  const expected =
+    !app.isPackaged && process.env['ELECTRON_RENDERER_URL']
+      ? process.env['ELECTRON_RENDERER_URL']
+      : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
   try {
     const actual = new URL(event.senderFrame.url);
     const target = new URL(expected as string);
-    return actual.protocol === target.protocol && actual.host === target.host &&
-      actual.pathname === target.pathname;
-  } catch { return false; }
+    return (
+      actual.protocol === target.protocol &&
+      actual.host === target.host &&
+      actual.pathname === target.pathname
+    );
+  } catch {
+    return false;
+  }
 }
 
 type ExportSession = {
@@ -572,46 +585,82 @@ app.on('ready', () => {
     try {
       const snapshot = snapshotSource(payload?.path);
       // File's size/mtime came from webUtils in isolated preload, not a raw path API.
-      if (snapshot.size !== payload.size || Math.abs(snapshot.mtimeMs - payload.lastModified) >= 1) return;
+      if (
+        snapshot.size !== payload.size ||
+        Math.abs(snapshot.mtimeMs - payload.lastModified) >= 1
+      )
+        return;
       let registry = authorizedSources.get(event.sender.id);
       if (!registry) {
         registry = new Map();
         const id = event.sender.id;
         authorizedSources.set(id, registry);
-        event.sender.once('destroyed', () => { authorizedSources.delete(id); deletingWindows.delete(id); });
+        event.sender.once('destroyed', () => {
+          authorizedSources.delete(id);
+          deletingWindows.delete(id);
+        });
       }
       registry.set(pathKey(snapshot.path), snapshot);
-    } catch { /* Invalid or stale files stay read-only. */ }
+    } catch {
+      /* Invalid or stale files stay read-only. */
+    }
   });
 
   ipcMain.handle('trash-files', async (event, payload) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const id = event.sender.id;
-    if (!win || !trustedSourceEvent(event)) return { ok: false, error: 'Untrusted source' };
-    if (deletingWindows.has(id) || exportSessions.size || composeSessions.size) return { ok: false, error: 'Another operation is active' };
+    if (!win || !trustedSourceEvent(event))
+      return { ok: false, error: 'Untrusted source' };
+    if (deletingWindows.has(id) || exportSessions.size || composeSessions.size)
+      return { ok: false, error: 'Another operation is active' };
     deletingWindows.add(id);
     const zh = payload?.locale === 'zh-CN';
     try {
-      if (typeof payload?.clipName !== 'string' || payload.clipName.length > 256) throw new Error('Invalid clip name');
-      const registry = authorizedSources.get(id) ?? new Map<string, SourceSnapshot>();
+      if (
+        typeof payload?.clipName !== 'string' ||
+        payload.clipName.length > 256
+      )
+        throw new Error('Invalid clip name');
+      const registry =
+        authorizedSources.get(id) ?? new Map<string, SourceSnapshot>();
       const files = validateTrashManifest(payload.paths, registry);
       const { response } = await dialog.showMessageBox(win, {
-        type: 'warning', defaultId: 1, cancelId: 1, noLink: true,
-        buttons: zh ? ['移到回收站', '取消'] : ['Move to Recycle Bin', 'Cancel'],
+        type: 'warning',
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+        buttons: zh
+          ? ['移到回收站', '取消']
+          : ['Move to Recycle Bin', 'Cancel'],
         title: zh ? '确认移到回收站' : 'Recycle clip?',
-        message: zh ? `将「${payload.clipName}」的 ${files.length} 个文件移到回收站？` : `Recycle ${files.length} files in "${payload.clipName}"?`,
-        detail: (zh ? '仅处理以下文件。如果磁盘不支持回收站，将停止操作，绝不改为永久删除。\n\n' : 'Only the files below will be processed. Stop on failure; never permanently delete when recycling is unavailable.\n\n') + files.map((f) => f.path).join('\n'),
+        message: zh
+          ? `将「${payload.clipName}」的 ${files.length} 个文件移到回收站？`
+          : `Recycle ${files.length} files in "${payload.clipName}"?`,
+        detail:
+          (zh
+            ? '仅处理以下文件。如果磁盘不支持回收站，将停止操作，绝不改为永久删除。\n\n'
+            : 'Only the files below will be processed. Stop on failure; never permanently delete when recycling is unavailable.\n\n') +
+          files.map((f) => f.path).join('\n'),
       });
-      if (response !== 0 || event.sender.isDestroyed()) return { ok: false, canceled: true };
+      if (response !== 0 || event.sender.isDestroyed())
+        return { ok: false, canceled: true };
       const result = await recycleManifest(files, (p) => shell.trashItem(p));
       for (const p of result.removedPaths) registry.delete(pathKey(p));
-      if (result.failedCount) result.error = zh
-        ? '部分或全部文件无法移到回收站（可能为磁盘不支持、文件已变化或被占用）。剩余文件已保留，未执行永久删除。'
-        : 'Recycling failed or the source changed. Remaining files are preserved; no permanent deletion was attempted.';
+      if (result.failedCount)
+        result.error = zh
+          ? '部分或全部文件无法移到回收站（可能为磁盘不支持、文件已变化或被占用）。剩余文件已保留，未执行永久删除。'
+          : 'Recycling failed or the source changed. Remaining files are preserved; no permanent deletion was attempted.';
       return result;
     } catch (e) {
-      return { ok: false, error: zh ? `未删除任何文件，请重新导入后再试：${errMsg(e)}` : errMsg(e) };
-    } finally { deletingWindows.delete(id); }
+      return {
+        ok: false,
+        error: zh
+          ? `未删除任何文件，请重新导入后再试：${errMsg(e)}`
+          : errMsg(e),
+      };
+    } finally {
+      deletingWindows.delete(id);
+    }
   });
 
   // ── SEI telemetry cache ──

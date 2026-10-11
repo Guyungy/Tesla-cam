@@ -14,22 +14,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build app
         run: |
-          npx tsc -b
-          npx tsc -p tsconfig.electron.json
-          npx vite build
+          pnpm exec tsc -b
+          pnpm exec tsc -p tsconfig.electron.json
+          pnpm exec vite build
 
       - name: Package Windows installer
-        run: npx electron-builder --win --config.win.signAndEditExecutable=false
+        run: pnpm exec electron-builder --win --config.win.signAndEditExecutable=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -47,22 +51,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build app
         run: |
-          npx tsc -b
-          npx tsc -p tsconfig.electron.json
-          npx vite build
+          pnpm exec tsc -b
+          pnpm exec tsc -p tsconfig.electron.json
+          pnpm exec vite build
 
       - name: Package macOS DMG
-        run: npx electron-builder --mac
+        run: pnpm exec electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
